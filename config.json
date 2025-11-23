@@ -1,0 +1,14 @@
+﻿{
+  "cluster_settings": {
+    "target_app_id": 570,
+    "concurrency": 1,
+    "custom_game_id": "3586896069" 
+  },
+  "accounts": [
+    { 
+      "username": "xiaoyanxiansheng1", 
+      "password": "Wg13127877713", 
+      "shared_secret": "" 
+    }
+  ]
+}

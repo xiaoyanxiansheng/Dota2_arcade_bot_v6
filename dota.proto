@@ -1,0 +1,55 @@
+﻿syntax = "proto2";
+package dota;
+
+// v6.16 Strict Schema
+message CMsgClientHello {
+  optional uint32 version = 1;
+  optional uint32 client_session_id = 2; 
+  optional uint32 client_launcher = 3;   
+  optional string secret_key = 4;
+  optional uint32 engine = 5;            
+}
+
+message CMsgConnectionStatus {
+  optional uint32 status = 1;
+  optional string client_session_id = 2;
+  optional uint32 queue_position = 3;
+  optional uint32 queue_size = 4;
+  optional uint32 wait_seconds = 5;
+  optional uint32 estimated_wait_seconds_remaining = 6;
+}
+
+message CMsgPracticeLobbyJoin {
+  optional uint64 lobby_id = 1;
+  optional uint32 friend_id = 2;
+  optional string pass_key = 3;
+  optional uint64 custom_game_id = 4;
+  optional bool client_request_fresh_lobby = 5; 
+  optional bool client_request_balanced_teams = 6;
+  optional uint32 server_region = 7;
+}
+
+// 新增：Join 响应解析
+message CMsgPracticeLobbyJoinResponse {
+  optional int32 result = 1; // EResult
+  optional int32 custom_game_details_count = 2; // 猜测字段
+}
+
+message CMsgPracticeLobbyCreate {
+  optional string search_key = 1;
+  optional bool test_lobby = 2;
+  optional string game_name = 3;
+  optional uint64 custom_game_id = 4;
+  optional uint32 tourney_info = 5;
+  optional uint32 lobby_details = 6;
+  optional string pass_key = 7;
+  optional uint32 server_region = 8;
+  optional uint32 game_mode = 9;
+}
+
+message CMsgGCMatchmakingStatsRequest {
+}
+
+message CMsgSetCustomGameId {
+  optional uint64 custom_game_id = 1;
+}

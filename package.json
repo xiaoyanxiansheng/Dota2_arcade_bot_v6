@@ -1,0 +1,10 @@
+﻿{
+  "name": "dota2-arcade-bot-v6-0",
+  "version": "6.0.0",
+  "dependencies": {
+    "steam-user": "^4.28.0",
+    "steam-totp": "^2.1.2",
+    "proxy-agent": "^6.3.0",
+    "protobufjs": "^7.2.5"
+  }
+}
