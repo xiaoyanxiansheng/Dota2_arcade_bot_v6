@@ -1,14 +1,99 @@
 ﻿{
-  "cluster_settings": {
+  "global_settings": {
     "target_app_id": 570,
-    "concurrency": 1,
-    "custom_game_id": "3586896069" 
+    "custom_game_id": "3586896069",
+    "server_region": 14,
+    "lobby_password": "123",
+    "max_players_per_room": 4,
+    "seeding_mode": true,
+    "debug_mode": true,
+    "debug_max_bots_per_room": 4
   },
-  "accounts": [
-    { 
-      "username": "xiaoyanxiansheng1", 
-      "password": "Wg13127877713", 
-      "shared_secret": "" 
+  "fleets": [
+    {
+      "id": "fleet_1",
+      "leader": { 
+        "username": "xiaoyanxiansheng4", 
+        "password": "WG13127877713", 
+        "shared_secret": "" 
+      },
+      "followers": [
+        { 
+          "username": "hkinzkccm679426", 
+          "password": "8m4Xf4xShad3",
+          "shared_secret": ""
+        },
+        { 
+          "username": "xkvypeemb629862", 
+          "password": "Us6iFiOKbO5y",
+          "shared_secret": ""
+        },
+        { 
+          "username": "dqmunjfkn376151", 
+          "password": "jtmK9yuJEk2G",
+          "shared_secret": ""
+        },
+        { 
+          "username": "hsgwmmlih035296", 
+          "password": "w7xfkQl4F3BS",
+          "shared_secret": ""
+        },
+        { 
+          "username": "mjqvzyqwn316084", 
+          "password": "pswKOiRdCTJ1",
+          "shared_secret": ""
+        },
+        { 
+          "username": "vmuwehmlz296310", 
+          "password": "bhSUwufi2mNm",
+          "shared_secret": ""
+        },
+        { 
+          "username": "bywalkiqh300495", 
+          "password": "pNDxsL2E8e0Y",
+          "shared_secret": ""
+        },
+        { 
+          "username": "fqibwtvtd531835", 
+          "password": "BTzAubsiUXCJ",
+          "shared_secret": ""
+        },
+        { 
+          "username": "uahbtdrex143963", 
+          "password": "CcKh9elgFTs4",
+          "shared_secret": ""
+        },
+        { 
+          "username": "nlvvcjgii370740", 
+          "password": "AvfTklPqfsaJ",
+          "shared_secret": ""
+        },
+        { 
+          "username": "czsgtgksm784972", 
+          "password": "WzRO2f69YUGB",
+          "shared_secret": ""
+        },
+        { 
+          "username": "eldjshpct141874", 
+          "password": "6Li4XtPrJC9U",
+          "shared_secret": ""
+        },
+        { 
+          "username": "cnymczgow205975", 
+          "password": "dVXAp1ND0Lq8",
+          "shared_secret": ""
+        },
+        { 
+          "username": "dgbmaylct573132", 
+          "password": "jVTxBmBjJOAJ",
+          "shared_secret": ""
+        },
+        { 
+          "username": "iqzjjmuaj363451", 
+          "password": "DaAblpcdhDcm",
+          "shared_secret": ""
+        }
+      ]
     }
   ]
 }
