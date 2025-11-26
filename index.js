@@ -581,7 +581,8 @@ class BotClient {
                 allchat: true,
                 fillWithBots: false,
                 allowCheats: false,
-                visibility: 0, // Public
+                visibility: 0, // Public (公开可见，需要密码才能加入)
+                passKey: this.settings.lobby_password, // 房间密码
                 customMapName: "zudui_team_map",
                 customGameCrc: Long.fromString(this.knownCrc, true),
                 customGameTimestamp: this.knownTimestamp
@@ -632,7 +633,8 @@ class BotClient {
                 allchat: true,
                 fillWithBots: false,
                 allowCheats: false,
-                visibility: 0,
+                visibility: 0, // Public (公开可见，需要密码才能加入)
+                passKey: this.settings.lobby_password, // 房间密码
                 customMapName: "zudui_team_map",
                 customGameCrc: Long.fromString(this.knownCrc, true),
                 customGameTimestamp: this.knownTimestamp
