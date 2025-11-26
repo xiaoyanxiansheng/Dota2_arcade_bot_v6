@@ -21,6 +21,39 @@ const k_EMsgGCReadyUpStatus = 7170;
 const k_EMsgGCPracticeLobbySetTeamSlot = 7047;
 const k_EMsgProtoMask = 0x80000000;
 
+// SOCache 消息 ID (GC SDK)
+const k_EMsgGCSOCacheSubscribed = 24;        // 订阅缓存
+const k_EMsgGCSOSingleObject = 25;           // 单对象更新
+const k_EMsgGCSOMultipleObjects = 26;        // 多对象更新
+
+// CSODOTALobby 的 TypeID
+const SOCACHE_TYPE_LOBBY = 2004;
+
+// DOTAJoinLobbyResult 枚举 (来自 dota_shared_enums.proto)
+const DOTAJoinLobbyResult = {
+    DOTA_JOIN_RESULT_SUCCESS: 0,
+    DOTA_JOIN_RESULT_ALREADY_IN_GAME: 1,
+    DOTA_JOIN_RESULT_INVALID_LOBBY: 2,       // <-- Code 2 的真正含义！
+    DOTA_JOIN_RESULT_INCORRECT_PASSWORD: 3,
+    DOTA_JOIN_RESULT_ACCESS_DENIED: 4,
+    DOTA_JOIN_RESULT_GENERIC_ERROR: 5,
+    DOTA_JOIN_RESULT_INCORRECT_VERSION: 6,
+    DOTA_JOIN_RESULT_IN_TEAM_PARTY: 7,
+    DOTA_JOIN_RESULT_NO_LOBBY_FOUND: 8,
+    DOTA_JOIN_RESULT_LOBBY_FULL: 9,
+    DOTA_JOIN_RESULT_CUSTOM_GAME_INCORRECT_VERSION: 10,
+    DOTA_JOIN_RESULT_TIMEOUT: 11,
+    DOTA_JOIN_RESULT_CUSTOM_GAME_COOLDOWN: 12,
+    DOTA_JOIN_RESULT_BUSY: 13,
+    DOTA_JOIN_RESULT_NO_PLAYTIME: 14
+};
+
+// 反向映射：Code -> 名称
+const JoinResultName = Object.entries(DOTAJoinLobbyResult).reduce((acc, [k, v]) => {
+    acc[v] = k.replace('DOTA_JOIN_RESULT_', '');
+    return acc;
+}, {});
+
 // Dota 2 枚举
 const DOTA_GC_TEAM = {
     DOTA_GC_TEAM_GOOD_GUYS: 0,
@@ -39,6 +72,8 @@ const DOTALobbyReadyState = {
 
 // 全局 Proto 定义
 let CMsgClientHello, CMsgPracticeLobbyJoin, CMsgPracticeLobbyJoinResponse, CMsgPracticeLobbyCreate, CMsgPracticeLobbySetDetails, CMsgJoinableCustomLobbiesRequest, CMsgJoinableCustomLobbiesResponse, CMsgQuickJoinCustomLobbyResponse, CMsgPracticeLobbySetTeamSlot, CMsgReadyUp, CMsgReadyUpStatus, CSODOTALobby, CDOTAClientHardwareSpecs;
+// SOCache 相关 Proto 类型
+let CMsgSOSingleObject, CMsgSOMultipleObjects, CMsgSOCacheSubscribed;
 
 // 加载 Proto
 try {
@@ -78,7 +113,13 @@ try {
     CSODOTALobby = root.lookupType("CSODOTALobby");
     CDOTAClientHardwareSpecs = root.lookupType("CDOTAClientHardwareSpecs");
     
+    // 加载 SOCache 相关类型
+    CMsgSOSingleObject = root.lookupType("CMsgSOSingleObject");
+    CMsgSOMultipleObjects = root.lookupType("CMsgSOMultipleObjects");
+    CMsgSOCacheSubscribed = root.lookupType("CMsgSOCacheSubscribed");
+    
     console.log("[System] Proto 文件加载成功");
+    console.log("[System] SOCache 类型加载完成: CMsgSOSingleObject, CMsgSOMultipleObjects, CMsgSOCacheSubscribed");
 } catch (e) {
     console.error("❌ Proto 加载失败: " + e.message);
     process.exit(1);
@@ -102,23 +143,193 @@ class FleetManager {
         this.config = fleetConfig;
         this.settings = globalSettings;
         this.bots = [];
-        // [新增] 共享房间状态表 (Key: RoomName, Value: { count: number, time: number })
+        // [新增] 共享房间状态表 (Key: RoomName, Value: { lobbyId, count: number, time: number })
         this.roomStates = new Map();
+        
+        // [新增] 虚拟人数表 (Key: LobbyID string, Value: number)
+        // 用于防止并发加入导致的超员
+        this.pendingJoins = new Map();
+
+        // [核心新增] 确认的房间信息 - 由 Leader 通过 SOCache 确认后设置
+        this.confirmedLobby = null; // { lobbyId, roomName, roomNumber, memberCount, confirmedAt }
+        
+        // [进度条] 统计信息
+        this.totalBots = 1 + (fleetConfig.followers?.length || 0); // Leader + Followers
+        this.progressInterval = null; // 进度条更新定时器
+    }
+    
+    // [进度条] 启动进度统计（每秒查询一次）
+    startProgressMonitor() {
+        // 只在生产模式下启动
+        if (this.settings.debug_mode) return;
+        
+        this.progressInterval = setInterval(() => {
+            this.updateProgress();
+        }, 1000); // 每秒更新一次
+    }
+    
+    // [进度条] 停止进度统计
+    stopProgressMonitor() {
+        if (this.progressInterval) {
+            clearInterval(this.progressInterval);
+            this.progressInterval = null;
+        }
+    }
+    
+    // [进度条] 更新进度显示
+    updateProgress() {
+        // 统计当前状态
+        let botsInLobby = 0;
+        let roomsCreated = 0;
+        const roomSet = new Set();
+        
+        // 遍历所有 Bot，统计在房间内的数量
+        this.bots.forEach(bot => {
+            if (bot.state === 'IN_LOBBY' || bot.state === 'SEEDING') {
+                botsInLobby++;
+                
+                // 统计房间数量（通过 currentLobbyId 去重）
+                if (bot.currentLobbyId) {
+                    roomSet.add(bot.currentLobbyId.toString());
+                }
+            }
+        });
+        
+        roomsCreated = roomSet.size;
+        
+        const percentage = Math.floor((botsInLobby / this.totalBots) * 100);
+        const barLength = 40;
+        const filledLength = Math.floor((percentage / 100) * barLength);
+        const emptyLength = barLength - filledLength;
+        
+        const bar = '█'.repeat(filledLength) + '░'.repeat(emptyLength);
+        const info = `房间: ${roomsCreated} | Bot: ${botsInLobby}/${this.totalBots}`;
+        
+        // 使用 \r 覆盖当前行
+        process.stdout.write(`\r[${bar}] ${percentage}% | ${info}`);
+        
+        // 如果达到100%，换行
+        if (percentage === 100 && botsInLobby === this.totalBots) {
+            process.stdout.write('\n');
+            this.stopProgressMonitor(); // 完成后停止监控
+        }
     }
 
-    updateRoomState(roomName, count) {
+    updateRoomState(roomName, lobbyId, count) {
+        // 清理过期的 pending joins (超过30秒的)
+        const now = Date.now();
+        
         this.roomStates.set(roomName, {
+            lobbyId: lobbyId,
             count: count,
-            time: Date.now()
+            time: now
         });
+    }
+
+    // [核心] Follower 申请加入房间
+    requestJoinSlot(followerName) {
+        const debugMode = this.settings.debug_mode || false;
+        const maxPerRoom = debugMode 
+            ? (this.settings.debug_max_bots_per_room || 3) 
+            : (this.settings.max_players_per_room - 1 || 3);
+
+        // 1. 收集所有候选房间 (合并 roomStates 和 confirmedLobby)
+        const candidates = new Map(this.roomStates);
+
+        // 确保 confirmedLobby 也在候选列表中
+        if (this.confirmedLobby && this.confirmedLobby.lobbyId) {
+            // 只有当 roomStates 里没有更新的数据时才覆盖
+            if (!candidates.has(this.confirmedLobby.roomName)) {
+                candidates.set(this.confirmedLobby.roomName, {
+                    lobbyId: this.confirmedLobby.lobbyId,
+                    count: this.confirmedLobby.memberCount,
+                    time: Date.now()
+                });
+            }
+        }
+
+        // 2. 严格排序：优先填满旧房间 (最小的房间号)
+        const sortedRooms = Array.from(candidates.entries())
+            .filter(([name, data]) => Date.now() - data.time < 60000) // 只看1分钟内的活跃房间
+            .sort((a, b) => {
+                const aNum = parseInt(a[0].match(/#(\d+)/)?.[1] || '0');
+                const bNum = parseInt(b[0].match(/#(\d+)/)?.[1] || '0');
+                return aNum - bNum; // 升序：#1, #2, #3...
+            });
+
+        // 3. 顺序分配
+        for (const [roomName, data] of sortedRooms) {
+            if (!data.lobbyId) continue;
+            
+            const lobbyIdStr = data.lobbyId.toString();
+            const pending = this.pendingJoins.get(lobbyIdStr) || 0;
+            const currentCount = data.count;
+            const totalVirtual = currentCount + pending;
+            
+            if (totalVirtual < maxPerRoom) {
+                // 批准加入
+                this.pendingJoins.set(lobbyIdStr, pending + 1);
+                
+                // 30秒后自动释放 pending 计数
+                setTimeout(() => {
+                    const p = this.pendingJoins.get(lobbyIdStr) || 0;
+                    if (p > 0) this.pendingJoins.set(lobbyIdStr, p - 1);
+                }, 30000);
+
+                if (this.settings.debug_mode) {
+                    console.log(`[Fleet:${this.id}] 🎫 分配 ${followerName} -> ${roomName} (实:${currentCount} + 虚:${pending} = ${totalVirtual + 1}/${maxPerRoom})`);
+                }
+                return { 
+                    action: 'JOIN', 
+                    lobbyId: data.lobbyId,
+                    roomName: roomName
+                };
+            }
+        }
+
+        return { action: 'WAIT' };
     }
 
     getRoomState(roomName) {
         return this.roomStates.get(roomName);
     }
+    
+    // [核心新增] Leader 确认房间创建成功后调用
+    setConfirmedLobby(lobbyId, roomName, roomNumber, memberCount) {
+        const oldLobby = this.confirmedLobby;
+        this.confirmedLobby = {
+            lobbyId: lobbyId,
+            roomName: roomName,
+            roomNumber: roomNumber,
+            memberCount: memberCount,
+            confirmedAt: Date.now()
+        };
+        
+        // [新增] 同步更新到全局 roomStates，确保刚创建的房间立即参与分配
+        this.updateRoomState(roomName, lobbyId, memberCount);
+        
+        if (this.settings.debug_mode) {
+            console.log(`[Fleet:${this.id}] 🎯 [CONFIRMED] 房间已确认: ID=${lobbyId.toString()} | Name="${roomName}" | Members=${memberCount}`);
+        }
+    }
+    
+    // [核心新增] Follower 获取确认的房间信息
+    getConfirmedLobby() {
+        return this.confirmedLobby;
+    }
+    
+    // [核心新增] 清除确认的房间（Leader 离开时调用）
+    clearConfirmedLobby() {
+        if (this.confirmedLobby && this.settings.debug_mode) {
+            console.log(`[Fleet:${this.id}] 🗑️ [CLEAR] 清除确认的房间: ID=${this.confirmedLobby.lobbyId?.toString() || 'null'}`);
+        }
+        this.confirmedLobby = null;
+    }
 
     start() {
-        console.log(`\n[Fleet:${this.id}] 🚀 车队启动! Leader: ${this.config.leader.username}`);
+        if (this.settings.debug_mode) {
+            console.log(`\n[Fleet:${this.id}] 🚀 车队启动! Leader: ${this.config.leader.username}`);
+        }
 
         // 1. 启动 Leader (传入 fleetId 和 manager)
         const leaderBot = new BotClient(this.config.leader, this.settings, 'LEADER', this.id, this);
@@ -128,15 +339,26 @@ class FleetManager {
         // 2. 启动 Followers (错峰，传入 fleetId 和 manager)
         this.config.followers.forEach((acc, idx) => {
             setTimeout(() => {
-                console.log(`[Fleet:${this.id}] 启动 Follower ${idx+1}: ${acc.username}`);
+                if (this.settings.debug_mode) {
+                    console.log(`[Fleet:${this.id}] 启动 Follower ${idx+1}: ${acc.username}`);
+                }
                 const bot = new BotClient(acc, this.settings, 'FOLLOWER', this.id, this);
                 this.bots.push(bot);
                 bot.start();
             }, 5000 + (idx * 3000)); // Leader 先跑5秒，然后每个Follower间隔3秒
         });
+        
+        // 3. 启动进度监控（生产模式）
+        if (!this.settings.debug_mode) {
+            // 延迟10秒后启动，等 Bot 们都开始运行
+            setTimeout(() => {
+                this.startProgressMonitor();
+            }, 10000);
+        }
     }
 
     cleanup() {
+        this.stopProgressMonitor(); // 停止进度监控
         this.bots.forEach(b => b.cleanup());
     }
                 }
@@ -181,12 +403,18 @@ class BotClient {
     }
 
     log(msg) {
+        // 生产模式下不打印日志
+        if (!this.settings.debug_mode) return;
         console.log(`[${this.account.username}|${this.role}] ${msg}`);
-            }
+    }
 
     error(msg) {
-        console.error(`[${this.account.username}|${this.role}] ❌ ${msg}`);
+        // 错误始终打印（换行后打印，避免覆盖进度条）
+        if (!this.settings.debug_mode) {
+            process.stdout.write('\n'); // 确保进度条不被覆盖
         }
+        console.error(`[${this.account.username}|${this.role}] ❌ ${msg}`);
+    }
 
     start() {
         this.state = 'LOGGING_IN';
@@ -203,14 +431,18 @@ class BotClient {
 
     setupListeners() {
         this.client.on('loggedOn', () => {
-            this.log('Steam 登录成功');
+            if (this.settings.debug_mode) {
+                this.log('Steam 登录成功');
+            }
             this.client.setPersona(SteamUser.EPersonaState.Online);
             this.client.gamesPlayed([this.settings.target_app_id]);
     });
 
         this.client.on('appLaunched', (appid) => {
             if (appid === this.settings.target_app_id) {
-                this.log('🎮 Dota 2 启动');
+                if (this.settings.debug_mode) {
+                    this.log('🎮 Dota 2 启动');
+                }
                 setTimeout(() => this.connectGC(), 2000);
         }
     });
@@ -219,7 +451,9 @@ class BotClient {
     }
 
     connectGC() {
-        this.log('开始连接 GC...');
+        if (this.settings.debug_mode) {
+            this.log('开始连接 GC...');
+        }
         this.sendHello();
         const helloInterval = setInterval(() => { 
             if(!this.is_gc_connected) this.sendHello(); 
@@ -249,14 +483,20 @@ class BotClient {
         setTimeout(() => {
             if (this.role === 'LEADER') {
                 if (this.isSeeding) {
-                    this.log('🌱 播种模式启动：将持续创建房间...');
+                    if (this.settings.debug_mode) {
+                        this.log('🌱 播种模式启动：将持续创建房间...');
+                    }
                     this.createLobbyAndSeed(); // 播种模式：创建并离开
                 } else {
-                    this.log('👑 车头模式：创建房间（仅一次）...');
+                    if (this.settings.debug_mode) {
+                        this.log('👑 车头模式：创建房间（仅一次）...');
+                    }
                     this.createLobby(); // 普通模式：创建一次
                 }
             } else {
-                this.log('💤 乘客模式：启动轮询，寻找车头房间...');
+                if (this.settings.debug_mode) {
+                    this.log('💤 乘客模式：启动轮询，寻找车头房间...');
+                }
                 this.startPolling(); // 启动轮询机制
             }
         }, 1500);
@@ -267,18 +507,39 @@ class BotClient {
         if (this.role !== 'FOLLOWER') return;
         
         // 立即执行一次
-        this.requestLobbyList();
+        this.tryJoinOrPoll();
         
-        // 每 10 秒轮询一次
+        // 每 5 秒轮询一次（加快轮询频率）
         this.poll_interval = setInterval(() => {
             if (this.state !== 'IN_LOBBY') {
-                this.requestLobbyList();
+                this.tryJoinOrPoll();
             } else {
                 // 已经进房了，停止轮询
                 clearInterval(this.poll_interval);
                 this.poll_interval = null;
             }
-        }, 10000);
+        }, 5000);
+    }
+    
+    // [核心新增] Follower 优先使用确认的 lobbyId 加入
+    tryJoinOrPoll() {
+        // 1. 向 Manager 申请分配
+        if (this.manager && this.role === 'FOLLOWER') {
+            const decision = this.manager.requestJoinSlot(this.account.username);
+            
+            if (decision.action === 'JOIN') {
+                if (this.settings.debug_mode) {
+                    this.log(`🎯 [分配模式] Manager 分配至: "${decision.roomName}"`);
+                }
+                this.joinLobbyDirectly(decision.lobbyId);
+                return;
+            } else if (this.settings.debug_mode) {
+                this.log(`⏳ [分配模式] 暂无空位，继续等待/轮询...`);
+            }
+        }
+        
+        // 2. 如果没有分配到，使用传统轮询来发现房间并上报状态
+        this.requestLobbyList();
     }
 
     requestLobbyList() {
@@ -294,10 +555,8 @@ class BotClient {
             const message = CMsgJoinableCustomLobbiesRequest.create(payload);
             const buffer = CMsgJoinableCustomLobbiesRequest.encode(message).finish();
             
-            // [优化] 仅在非播种轮询或调试模式下打印请求日志，减少刷屏
-            const shouldLog = this.settings.debug_mode || !this.isSeeding || this.role !== 'LEADER';
-            
-            if (shouldLog) {
+            // [优化] 仅在调试模式下打印请求日志
+            if (this.settings.debug_mode) {
                 if (this.role === 'FOLLOWER') {
                     this.log(`🔍 轮询房间列表，寻找车队 [${this.fleetId}] 的房间...`);
                 } else {
@@ -349,15 +608,17 @@ class BotClient {
         }
     }
 
-    // [播种模式] 创建房间并等待小号加入
+        // [播种模式] 创建房间并等待小号加入
     createLobbyAndSeed() {
         this.roomsCreated++;
         this.currentRoomNumber = this.roomsCreated; // 记录当前房间编号
         const roomName = `Bot Room ${this.fleetId} #${this.roomsCreated}`;
         
         try {
-            // [DEBUG] 打印关键状态
-            this.log(`🔧 [创建前状态] roomsCreated=${this.roomsCreated}, currentRoomNumber=${this.currentRoomNumber}, oldLobbyID=${this.currentLobbyId}, oldMemberCount=${this.currentRoomMemberCount}`);
+            // [DEBUG] 打印关键状态（仅调试模式）
+            if (this.settings.debug_mode) {
+                this.log(`🔧 [创建前状态] roomsCreated=${this.roomsCreated}, currentRoomNumber=${this.currentRoomNumber}, oldLobbyID=${this.currentLobbyId}, oldMemberCount=${this.currentRoomMemberCount}`);
+            }
 
             const gameIdLong = Long.fromString(this.settings.custom_game_id, true);
             const detailsPayload = {
@@ -389,17 +650,21 @@ class BotClient {
             const buffer = CMsgPracticeLobbyCreate.encode(message).finish();
             
             this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyCreate | k_EMsgProtoMask, {}, buffer);
-            this.log(`🌱 [播种 ${this.roomsCreated}] 创建房间: ${roomName} - 等待小号加入...`);
+            this.log(`🌱 创建房间: ${roomName}`);
             
             this.state = 'SEEDING';
             this.currentRoomMemberCount = 1; // 重置人数计数（只有自己）
+            // [修正] 不在这里清空 lobbyId，避免干扰超时判断
+            // this.currentLobbyId = null; // 将在 processLobbyData 中更新
             
             // [关键修复] 立即发送 ReadyUp，激活房间，防止 GC 认为房间无效而删除
             // 连续发送 5 次，每秒一次，确保房间稳定
             let heartbeats = 0;
             const activationInterval = setInterval(() => {
                 if (this.state === 'SEEDING') {
-                    this.log(`🔥 [激活房间 ${heartbeats+1}/5] 发送 ReadyUp 心跳...`);
+                    if (this.settings.debug_mode) {
+                        this.log(`🔥 [激活房间 ${heartbeats+1}/5] 发送 ReadyUp 心跳...`);
+                    }
                     this.sendReadyUp();
                     heartbeats++;
                     if (heartbeats >= 5) clearInterval(activationInterval);
@@ -408,33 +673,38 @@ class BotClient {
                 }
             }, 1000);
             
-            // [盲轮询] 延迟 2 秒后启动轮询，给 GC 更多时间同步
-            setTimeout(() => {
-                if (this.state === 'SEEDING' && !this.poll_interval) {
-                    this.log('🕶️ 启动盲轮询机制：主动检查房间列表...');
-                    this.startLeaderPolling();
+            if (this.settings.debug_mode) {
+                this.log('⏳ [等待确认] 已发送创建请求，等待 GC 推送 Lobby 数据...');
+            }
+
+            // [新增] 创建超时重试机制
+            if (this.creationTimeout) clearTimeout(this.creationTimeout);
+            this.creationTimeout = setTimeout(() => {
+                // 如果 15 秒后还在 SEEDING 状态
+                if (this.state === 'SEEDING') {
+                    // 只有当确实没有收到正确的房间确认时才重试
+                    if (!this.currentLobbyId || this.currentRoomMemberCount === 0) {
+                        this.log(`⚠️ 创建房间超时（15秒无确认），重试创建...`);
+                        if (this.settings.debug_mode) {
+                            this.log(`   [DEBUG] currentLobbyId=${this.currentLobbyId ? this.currentLobbyId.toString() : 'null'}, memberCount=${this.currentRoomMemberCount}`);
+                        }
+                        
+                        // 清空旧状态，强制重新创建
+                        this.currentLobbyId = null;
+                        this.currentRoomMemberCount = 1;
+                        
+                        this.roomsCreated--; // 回退计数，重新创建同一个房间
+                        this.createLobbyAndSeed();
+                    } else if (this.settings.debug_mode) {
+                        this.log(`✅ [超时检查] 房间已确认，无需重试`);
+                    }
                 }
-            }, 2000);
+            }, 15000);
 
         } catch (err) {
             this.error(`播种失败: ${err.message}`);
             }
         }
-
-    // [新增] Leader 轮询检测
-    startLeaderPolling() {
-        if (this.poll_interval) clearInterval(this.poll_interval);
-        
-        this.log('🔍 启动 Leader 轮询检测 (每 1 秒)');
-        this.poll_interval = setInterval(() => {
-            if (this.state !== 'SEEDING') {
-                clearInterval(this.poll_interval);
-                this.poll_interval = null;
-                return;
-            }
-            this.requestLobbyList(); // 主动查询列表
-        }, 1000); // 缩短到 1 秒，加快响应 Follower 上报
-    }
 
     // [新增] 主动离开房间
     leaveLobby() {
@@ -455,9 +725,13 @@ class BotClient {
         }
     }
 
-    // [播种模式] 断开重连并创建新房间
+         // [播种模式] 断开重连并创建新房间
     reconnectAndSeed() {
-        this.log('🔄 断开连接，准备重新登录...');
+        // 防止重复调用
+        if (this.state === 'LEAVING_LOBBY' || this.state === 'RECONNECTING') return;
+        
+        this.log('🔄 离开房间，准备创建新房间...');
+        this.state = 'LEAVING_LOBBY'; // 标记状态，等待 SOCache-25 (Type 18) 移除通知
         
         // 清理所有定时器
         if (this.ready_up_heartbeat) {
@@ -466,38 +740,71 @@ class BotClient {
         }
         if (this.poll_interval) {
             clearInterval(this.poll_interval);
-            this.poll_interval = null; // [关键修复] 必须重置为 null，否则下次创建房间时无法启动轮询
-                    }
+            this.poll_interval = null; 
+        }
+        // [关键修复] 清除创建超时定时器，防止误触发重试
+        if (this.creationTimeout) {
+            clearTimeout(this.creationTimeout);
+            this.creationTimeout = null;
+            if (this.settings.debug_mode) {
+                this.log('⏱️ 清除创建超时定时器（进入离开流程）');
+            }
+        }
+        
+        // [核心] 清除 Manager 中确认的房间
+        if (this.manager) {
+            if (this.settings.debug_mode) {
+                this.log('🗑️ 清除 Manager 中确认的房间...');
+            }
+            this.manager.clearConfirmedLobby();
+        }
                     
-        // [关键修复] 先显式离开房间，确保 GC 清理旧房间的"房主"状态
-        // 防止一个账号同时持有多个房间导致冲突
-        if (this.is_gc_connected && this.currentLobbyId) {
-            this.log('👋 显式发送 AbandonCurrentGame & LeaveLobby，确保彻底退出旧房间...');
+        // 发送离开请求
+        if (this.is_gc_connected) {
+            if (this.settings.debug_mode) {
+                this.log('👋 发送离开请求，等待确认...');
+            }
             try {
                 this.client.sendToGC(this.settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
                 this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
-            } catch (e) {}
+            } catch (e) {
+                this.error(`发送离开消息失败: ${e.message}`);
+            }
         }
         
-        // 标记为重连状态
+        // [保底机制] 15秒后如果还没收到确认，强制重连
+        setTimeout(() => {
+            if (this.state === 'LEAVING_LOBBY') {
+                this.log('⚠️ 离开确认超时 (15秒)，强制执行重连...');
+                this.performReconnect();
+            }
+        }, 15000);
+    }
+
+    // [核心新增] 执行实际的断开重连操作
+    performReconnect() {
         this.state = 'RECONNECTING';
         this.is_gc_connected = false;
         
-        // [关键修复] 清空所有旧房间状态
-        this.log(`🗑️ 清空旧状态: LobbyID=${this.currentLobbyId}, MemberCount=${this.currentRoomMemberCount}, MissingCount=${this.missingRoomCount}`);
+        // 清空旧状态
+        if (this.settings.debug_mode) {
+            this.log(`🗑️ 清空旧状态: LobbyID=${this.currentLobbyId}, MemberCount=${this.currentRoomMemberCount}`);
+        }
         this.currentLobbyId = null;
-        this.currentRoomMemberCount = 1; // 重置为初始值
-        this.missingRoomCount = 0; // 重置未找到房间计数
+        this.currentRoomMemberCount = 1; 
+        this.missingRoomCount = 0; 
         
         // 断开 Steam 连接
         this.client.logOff();
                             
         // 增加延时到 5 秒，给 GC 足够时间清理旧房间状态
-                            setTimeout(() => {
-            this.log('🔌 重新登录...');
+        setTimeout(() => {
+            if (this.settings.debug_mode) {
+                this.log('🔌 重新登录，创建新房间...');
+            }
             this.start();
         }, 5000);
-            }
+    }
 
     joinLobbyDirectly(lobbyIdInput) {
         if (this.state === 'IN_LOBBY') return;
@@ -507,7 +814,9 @@ class BotClient {
             if (typeof lobbyId === 'string') lobbyId = Long.fromString(lobbyId, true);
             else if (typeof lobbyId === 'number') lobbyId = Long.fromNumber(lobbyId, true);
 
-            this.log(`🚀 发起定向加入 -> ${lobbyId.toString()}`);
+            if (this.settings.debug_mode) {
+                this.log(`🚀 发起定向加入 -> ${lobbyId.toString()}`);
+            }
 
             const payload = {
                 lobbyId: lobbyId,
@@ -528,14 +837,23 @@ class BotClient {
         if (appid !== this.settings.target_app_id) return;
         const cleanMsgType = msgType & ~k_EMsgProtoMask;
 
-        // [临时调试] 打印 Leader 收到的所有 GC 消息（排除高频消息）
-        if (this.role === 'LEADER' && ![7469, 7388, 7036].includes(cleanMsgType)) {
-            this.log(`🔔 [DEBUG] 收到消息 ${cleanMsgType}, state=${this.state}, isSeeding=${this.isSeeding}`);
+        // [调试模式] 打印所有 GC 消息
+        const isImportantMsg = [24, 25, 26, 7055, 7004, 7113, 7170].includes(cleanMsgType);
+        const isHighFreq = [7469, 7388, 7036].includes(cleanMsgType);
+        
+        if (this.settings.debug_mode) {
+            if (isImportantMsg) {
+                this.log(`🔔 [GC重要消息] ${cleanMsgType} | state=${this.state} | payload.length=${payload.length}`);
+            } else if (!isHighFreq) {
+                this.log(`🔔 [GC消息] ${cleanMsgType} | state=${this.state}`);
+            }
         }
 
         if (cleanMsgType === k_EMsgGCClientConnectionStatus) {
              if (!this.is_gc_connected) {
-                 this.log('✅ GC 连接确认');
+                 if (this.settings.debug_mode) {
+                     this.log('✅ GC 连接确认');
+                 }
                  this.is_gc_connected = true;
                  this.startArcadeFlow();
                         }
@@ -555,16 +873,16 @@ class BotClient {
                 if (this.role === 'FOLLOWER' && this.manager) {
                     myLobbies.forEach(l => {
                         if (l.lobbyName && l.lobbyName.includes(this.fleetId)) {
-                            this.manager.updateRoomState(l.lobbyName, l.memberCount);
+                            this.manager.updateRoomState(l.lobbyName, l.lobbyId, l.memberCount);
                             // [调试] 打印上报信息
                             if (this.settings.debug_mode) {
-                                this.log(`🔔 [上报] 房间 "${l.lobbyName}" 人数: ${l.memberCount}`);
+                                this.log(`🔔 [上报] 房间 "${l.lobbyName}" ID:${l.lobbyId} 人数: ${l.memberCount}`);
                             }
                         }
                     });
                     }
                     
-                // [调试打印] 打印所有扫描到的房间详情，方便排查
+                // [调试打印] 打印所有扫描到的房间详情
                 if (this.settings.debug_mode) {
                     this.log(`📊 [DEBUG] 扫描到 ${myLobbies.length} 个相关房间:`);
                     myLobbies.forEach((l, idx) => {
@@ -573,8 +891,6 @@ class BotClient {
                     if (this.role === 'LEADER') {
                         this.log(`   🎯 Leader当前目标: ID=${this.currentLobbyId ? this.currentLobbyId.toString() : 'null'} | Name="Bot Room ${this.fleetId} #${this.currentRoomNumber}"`);
                     }
-                } else {
-                    this.log(`📊 扫描到 ${myLobbies.length} 个相关房间`);
                 }
 
                 if (this.role === 'FOLLOWER') {
@@ -617,177 +933,21 @@ class BotClient {
                         }
                     }
                     
-                    // [原有逻辑] 如果不在房间，寻找可用房间
+                     // [修改] 移除了自动加入逻辑，完全依赖 Manager 分配
                     if (this.state !== 'IN_LOBBY') {
                         // [调试模式] 设置每个房间最大Bot数量（给玩家预留观察位）
                         const debugMode = this.settings.debug_mode || false;
                         const maxBotsPerRoom = debugMode ? (this.settings.debug_max_bots_per_room || 3) : this.settings.max_players_per_room;
                         
-                        // [Follower 逻辑] 寻找包含车队 ID 的房间名，且人数未达到Bot上限的
-                        const availableRooms = myLobbies.filter(l => {
-                            if (!l.lobbyName || !l.lobbyName.includes(this.fleetId)) return false;
-                            
-                            // 在调试模式下，只要房间人数 < maxBotsPerRoom 就可加入
-                            // 在生产模式下，只要房间人数 < maxPlayerCount 就可加入
-                            const currentCount = l.memberCount || 0;
-                            return currentCount < maxBotsPerRoom;
-                        });
-
-                        if (availableRooms.length > 0) {
-                            // ⚠️ 按序号从小到大排序，优先加入编号最小的未满房间
-                            availableRooms.sort((a, b) => {
-                                const aNum = parseInt(a.lobbyName.match(/#(\d+)/)?.[1] || '0');
-                                const bNum = parseInt(b.lobbyName.match(/#(\d+)/)?.[1] || '0');
-                                return aNum - bNum; // 升序（从小到大）
-                            });
-                            
-                            const targetRoom = availableRooms[0];
-                            const debugInfo = debugMode ? ` [调试模式: 最多${maxBotsPerRoom}个Bot]` : '';
-                            this.log(`✅ 找到可用房间: ${targetRoom.lobbyName} (${targetRoom.memberCount}/${targetRoom.maxPlayerCount})${debugInfo}`);
-                            
-                            // 更新版本信息
-                            this.knownCrc = targetRoom.customGameCrc.toString();
-                            this.knownTimestamp = targetRoom.customGameTimestamp;
-                            
-                            // 加入房间
-                            this.joinLobbyDirectly(targetRoom.lobbyId);
-                        } else {
-                            const debugInfo = debugMode ? ` (调试模式: Bot上限=${maxBotsPerRoom})` : '';
-                            this.log(`⏳ 未找到可用房间，继续等待...${debugInfo}`);
+                        if (this.settings.debug_mode) {
+                            this.log(`⏳ [被动模式] 已上报房间信息，等待 Manager 分配...`);
                         }
                     }
                 }
-                // [Leader 逻辑] 
-                else if (this.role === 'LEADER') {
-                    // --- [新增] 车队全局状态统计 (仅在变化时打印) ---
-                    const fleetRooms = myLobbies.filter(l => l.lobbyName && l.lobbyName.includes(this.fleetId));
-                    // 按房间号排序
-                    fleetRooms.sort((a, b) => {
-                        const aNum = parseInt(a.lobbyName.match(/#(\d+)/)?.[1] || '0');
-                        const bNum = parseInt(b.lobbyName.match(/#(\d+)/)?.[1] || '0');
-                        return aNum - bNum;
-                    });
-
-                    // 生成快照字符串用于比对
-                    const currentSnapshot = fleetRooms.map(r => `${r.lobbyName}=${r.memberCount}`).join('|');
-                
-                    if (currentSnapshot !== this.lastFleetSnapshot && fleetRooms.length > 0) {
-                        this.log(`\n📊 === [车队兵力分布] ===`);
-                        fleetRooms.forEach(r => {
-                             const isFull = r.memberCount >= (this.settings.max_players_per_room || 4);
-                             const status = isFull ? "✅ 满员" : "⏳ 等待";
-                             this.log(`   🏠 ${r.lobbyName}: ${r.memberCount}/${r.maxPlayerCount} 人 [${status}]`);
-                        });
-                        this.log(`========================\n`);
-                        this.lastFleetSnapshot = currentSnapshot;
-                    }
-                    // ---------------------------------------------
-
-                    // 1. 创建初期确认
-                    if (this.state === 'CREATING_LOBBY') {
-                        const mySteamId = this.client.steamID ? this.client.steamID.accountid : null;
-                        if (!mySteamId) {
-                            this.log('⚠️ 无法获取 SteamID，跳过检测');
-                            return;
-                        }
-                        const selfHostedLobby = myLobbies.find(l => l.leaderAccountId === mySteamId);
-                        
-                        if (selfHostedLobby) {
-                            this.log(`✅ 房间创建成功! ID=${selfHostedLobby.lobbyId}`);
-                            this.currentLobbyId = selfHostedLobby.lobbyId;
-                            
-                            if (this.isSeeding) {
-                                this.state = 'SEEDING'; // 进入播种检测状态
-                                this.startLeaderPolling(); // 启动主动轮询
-                            } else {
-                                this.onEnterLobby(true);
-                            }
-                        }
-                    }
-                    // 2. 播种模式下检测人数变化
-                    else if (this.state === 'SEEDING') {
-                        // [千里眼] 优先从 Manager 获取真实人数（由 Follower 上报）
-                        // 解决 Leader 处于房间内导致视角滞后，无法看到真实人数的问题
-                        if (this.manager) {
-                            const targetRoomName = `Bot Room ${this.fleetId} #${this.currentRoomNumber}`;
-                            const reportedState = this.manager.getRoomState(targetRoomName);
-                            
-                            // [调试] 每次都打印检查结果
-                            if (this.settings.debug_mode) {
-                                this.log(`👁️ [千里眼检查] 房间 "${targetRoomName}" | 上报人数: ${reportedState ? reportedState.count : '未上报'} | Leader记录: ${this.currentRoomMemberCount}`);
-            }
-                            
-                            // 如果 Follower 上报的人数 > Leader 记录的人数
-                            if (reportedState && reportedState.count > this.currentRoomMemberCount) {
-                                this.log(`👀 [千里眼] 收到 Follower 上报: 房间 ${targetRoomName} 人数已达 ${reportedState.count} (Leader视角: ${this.currentRoomMemberCount})`);
-                                
-                                // 触发重连逻辑
-                                this.log(`👥 检测到小号加入 (${this.currentRoomMemberCount} -> ${reportedState.count})，重新登录并创建新房间...`);
-                                this.currentRoomMemberCount = reportedState.count;
-                                
-                                if (this.poll_interval) {
-                                    clearInterval(this.poll_interval);
-                                    this.poll_interval = null;
-                                }
-                                this.reconnectAndSeed();
-                                return; // 退出函数，避免重复处理
-                            }
-                        }
-
-                        // 优先通过 lobbyId 查找（最稳）
-                        let myRoom = null;
-                        if (this.currentLobbyId) {
-                            // 注意：protobuf Long 类型比较需要用 equals 或 toString
-                            const targetIdStr = this.currentLobbyId.toString();
-                            myRoom = myLobbies.find(l => l.lobbyId && l.lobbyId.toString() === targetIdStr);
-                        }
-                        
-                        // 如果 lobbyId 没找到，再尝试通过名字兜底
-                        if (!myRoom) {
-                            const targetRoomName = `Bot Room ${this.fleetId} #${this.currentRoomNumber}`;
-                            myRoom = myLobbies.find(l => l.lobbyName === targetRoomName);
-                        }
-
-                        if (myRoom) {
-                            const currentCount = myRoom.memberCount || 0;
-                            // [优化] 仅在人数有变化或首次检测时打印，避免刷屏
-                            if (currentCount > this.currentRoomMemberCount) {
-                                this.log(`📊 [播种检测] 房间 #${this.currentRoomNumber} (ID:${myRoom.lobbyId}) 人数: ${currentCount} (预期 > ${this.currentRoomMemberCount})`);
-                            }
-                            
-                            // 重置"找不到房间"计数器（说明房间还在）
-                            this.missingRoomCount = 0;
-                            
-                            if (currentCount > this.currentRoomMemberCount) {
-                                this.log(`👥 检测到小号加入 (${this.currentRoomMemberCount} -> ${currentCount})，重新登录并创建新房间...`);
-                                this.currentRoomMemberCount = currentCount;
-                                
-                                // 停止轮询
-                                if (this.poll_interval) {
-                                    clearInterval(this.poll_interval);
-                                    this.poll_interval = null;
-                                }
-                                
-                                // 断开并重新登录
-                                this.reconnectAndSeed();
-                 }
-                        } else {
-                            // 如果找不到房间，有两种情况：
-                            // 1. 刚创建还没同步到列表（等待下一次轮询）
-                            // 2. 房间已解散（罕见，触发重连）
-                            // 为了稳妥，如果连续 10 次都找不到，就认为需要重连 (约 30 秒)
-                            if (!this.missingRoomCount) this.missingRoomCount = 0;
-                            this.missingRoomCount++;
-                            
-                            if (this.missingRoomCount >= 10) {
-                                this.log(`⚠️ 连续 10 次未找到房间 #${this.currentRoomNumber}，判定为已解散，创建下一个房间...`);
-                                this.missingRoomCount = 0;
-                                this.reconnectAndSeed();
-                            } else {
-                                this.log(`⚠️ 列表中未找到房间 #${this.currentRoomNumber} (${this.missingRoomCount}/10)`);
-        }
-                        }
-                    }
+                // [Leader 逻辑] - 仅保留调试信息
+                else if (this.role === 'LEADER' && this.settings.debug_mode) {
+                    // 只是简单打印，不做逻辑判断
+                    this.log(`🔍 [DEBUG] Leader 收到了房间列表响应，忽略...`);
                 }
 
             } catch (e) {
@@ -801,22 +961,24 @@ class BotClient {
                  if (lobby.lobbyId) {
                     const oldLobbyId = this.currentLobbyId;
                     this.currentLobbyId = lobby.lobbyId;
-                    this.log(`🆔 [ID更新] 从 ${oldLobbyId ? oldLobbyId.toString() : 'null'} -> ${lobby.lobbyId.toString()}`);
+                    
+                    if (this.settings.debug_mode) {
+                        this.log(`🆔 [ID更新] 从 ${oldLobbyId ? oldLobbyId.toString() : 'null'} -> ${lobby.lobbyId.toString()}`);
+                    }
                     
                     // [播种模式] Leader 混合检测模式：优先使用 Snapshot，轮询作为兜底
                     if (this.role === 'LEADER' && this.isSeeding) {
                         const newMemberCount = (lobby.members && lobby.members.length) || 0;
-                        this.log(`📩 收到 Lobby Snapshot, 人数=${newMemberCount}`);
                         
-                        // [修正] 无论当前人数多少，只要收到 Snapshot 确认房间已创建，就启动轮询
-                        if (!this.poll_interval && this.state === 'SEEDING') {
-                             this.log(`🔍 启动 Leader 轮询检测 (每 1 秒) - 当前人数: ${newMemberCount}`);
-                             this.startLeaderPolling();
+                        if (this.settings.debug_mode) {
+                            this.log(`📩 收到 Lobby Snapshot, 人数=${newMemberCount}`);
                         }
-
+                        
                         // [补丁] 强制发送 ReadyUp 以激活房间状态
                         if (newMemberCount === 1 && this.state === 'SEEDING') {
-                             this.log('💓 发送强制心跳以激活新房间...');
+                             if (this.settings.debug_mode) {
+                                 this.log('💓 发送强制心跳以激活新房间...');
+                             }
                              this.sendReadyUp(lobby.lobbyId);
                         }
 
@@ -824,41 +986,242 @@ class BotClient {
                         this.missingRoomCount = 0;
 
                         if (newMemberCount > this.currentRoomMemberCount) {
-                            this.log(`👥 [快照检测] 检测到小号加入 (${this.currentRoomMemberCount} -> ${newMemberCount})，触发重连...`);
+                            if (this.settings.debug_mode) {
+                                this.log(`👥 检测到新成员 (${this.currentRoomMemberCount} -> ${newMemberCount})`);
+                            }
                             this.currentRoomMemberCount = newMemberCount;
              
-                            // 停止轮询
-                            if (this.poll_interval) {
-                                clearInterval(this.poll_interval);
-                                this.poll_interval = null;
-                        }
-                        
                             this.reconnectAndSeed();
                         }
                             return;
                         }
                         
-                    this.log(`📩 收到 Lobby Snapshot, ID=${lobby.lobbyId.toString()}`);
+                    if (this.settings.debug_mode) {
+                        this.log(`📩 收到 Lobby Snapshot, ID=${lobby.lobbyId.toString()}`);
+                    }
                     this.onEnterLobby(true);
              }
             } catch(e) {}
         }
-        // 监听加入结果 (7113)
+        // ============================================
+        // [核心新增] 监听 7055 - 房间创建响应
+        // ============================================
+        else if (cleanMsgType === k_EMsgGCPracticeLobbyResponse) {
+            if (this.settings.debug_mode) {
+                this.log(`📨 [7055] ===== 收到 PracticeLobbyResponse =====`);
+                this.log(`📨 [7055] payload.length = ${payload.length}`);
+            }
+            
+            // 尝试解析响应
+            try {
+                // 7055 可能包含 DOTAJoinLobbyResult 
+                // 尝试读取第一个字节（varint）
+                if (payload.length > 0) {
+                    // 使用 protobuf varint 解码
+                    let resultCode = 0;
+                    let shift = 0;
+                    for (let i = 0; i < Math.min(payload.length, 10); i++) {
+                        const byte = payload[i];
+                        resultCode |= (byte & 0x7F) << shift;
+                        if ((byte & 0x80) === 0) break;
+                        shift += 7;
+                    }
+                    
+                    const resultName = JoinResultName[resultCode] || `UNKNOWN_${resultCode}`;
+                    
+                    if (this.settings.debug_mode) {
+                        this.log(`📨 [7055] Result Code: ${resultCode} (${resultName})`);
+                        
+                        if (resultCode === DOTAJoinLobbyResult.DOTA_JOIN_RESULT_SUCCESS) {
+                            this.log(`📨 [7055] ✅ 房间操作成功！`);
+                        } else {
+                            this.log(`📨 [7055] ❌ 房间操作失败: ${resultName}`);
+                        }
+                        
+                        // 打印原始 payload 用于调试
+                        this.log(`📨 [7055] Raw payload (hex): ${payload.slice(0, 32).toString('hex')}...`);
+                    }
+                }
+                
+            } catch (e) {
+                if (this.settings.debug_mode) {
+                    this.log(`📨 [7055] 解析失败: ${e.message}`);
+                }
+            }
+        }
+        // ============================================
+        // [核心新增] 监听 SOCache 消息 (24/25/26) 获取 Lobby 信息
+        // ============================================
+        else if (cleanMsgType === k_EMsgGCSOCacheSubscribed) {
+            if (this.settings.debug_mode) {
+                this.log(`📦 [SOCache-24] ===== 收到 CMsgSOCacheSubscribed =====`);
+            }
+            try {
+                const msg = CMsgSOCacheSubscribed.decode(payload);
+                if (this.settings.debug_mode) {
+                    this.log(`📦 [SOCache-24] objects.length = ${msg.objects?.length || 0}`);
+                }
+                
+                // 遍历所有类型的对象
+                (msg.objects || []).forEach((typeObj, idx) => {
+                    if (this.settings.debug_mode) {
+                        this.log(`📦 [SOCache-24]   [${idx}] typeId=${typeObj.typeId}, objectData.length=${typeObj.objectData?.length || 0}`);
+                    }
+                    
+                    if (typeObj.typeId === SOCACHE_TYPE_LOBBY) {
+                        if (this.settings.debug_mode) {
+                            this.log(`📦 [SOCache-24]   🎯 发现 CSODOTALobby 类型!`);
+                        }
+                        (typeObj.objectData || []).forEach((data, dataIdx) => {
+                            this.processLobbyData(data, `SOCache-24[${idx}][${dataIdx}]`);
+                        });
+                    }
+                });
+            } catch (e) {
+                this.log(`📦 [SOCache-24] 解析失败: ${e.message}`);
+            }
+        }
+        else if (cleanMsgType === k_EMsgGCSOSingleObject) {
+            if (this.settings.debug_mode) {
+                this.log(`📦 [SOCache-25] ===== 收到 CMsgSOSingleObject ===== (payload: ${payload.length} bytes)`);
+            }
+            let typeId = 0;
+            
+            try {
+                // 尝试安全解码
+                const msg = CMsgSOSingleObject.decode(payload);
+                typeId = msg.typeId;
+                if (this.settings.debug_mode) {
+                    this.log(`📦 [SOCache-25] ✅ 解析成功! typeId = ${typeId}`);
+                    this.log(`📦 [SOCache-25]   objectData.length = ${msg.objectData ? msg.objectData.length : 0}`);
+                }
+                
+                if (typeId === SOCACHE_TYPE_LOBBY) {
+                    if (this.settings.debug_mode) {
+                        this.log(`📦 [SOCache-25] 🎯 发现 CSODOTALobby 类型!`);
+                    }
+                    this.processLobbyData(msg.objectData, 'SOCache-25');
+                }
+            } catch (e) {
+                if (this.settings.debug_mode) {
+                    this.log(`📦 [SOCache-25] ❌ 解析失败: ${e.message}`);
+                }
+                
+                // [补丁] 如果是 13 字节的短消息，尝试直接读取 typeId (varint)
+                if (payload.length < 20) {
+                    try {
+                        let shift = 0;
+                        for (let i = 0; i < 5 && i < payload.length; i++) {
+                            const b = payload[i];
+                            typeId |= (b & 0x7F) << shift;
+                            if ((b & 0x80) === 0) break;
+                            shift += 7;
+                        }
+                        if (this.settings.debug_mode) {
+                            this.log(`📦 [SOCache-25] [RawRead] 尝试直接读取 typeId: ${typeId}`);
+                        }
+                    } catch (err) {}
+                }
+            }
+
+            // [核心] 处理 Type 18 作为离开确认
+            if (typeId === 18) {
+                if (this.settings.debug_mode) {
+                    this.log(`📦 [SOCache-25] 🔍 收到 Type 18 (Party/Team Update)`);
+                }
+                
+                // 如果正在等待离开确认
+                if (this.role === 'LEADER' && this.state === 'LEAVING_LOBBY') {
+                    this.log('✅ 离开确认成功');
+                    this.performReconnect();
+                }
+            }
+        }
+        else if (cleanMsgType === k_EMsgGCSOMultipleObjects) {
+            if (this.settings.debug_mode) {
+                this.log(`📦 [SOCache-26] ===== 收到 CMsgSOMultipleObjects =====`);
+            }
+            try {
+                const msg = CMsgSOMultipleObjects.decode(payload);
+                const modified = msg.objectsModified || [];
+                const added = msg.objectsAdded || [];
+                const removed = msg.objectsRemoved || [];
+                
+                if (this.settings.debug_mode) {
+                    this.log(`📦 [SOCache-26] modified=${modified.length}, added=${added.length}, removed=${removed.length}`);
+                }
+                
+                // 详细打印 removed 对象
+                if (removed.length > 0 && this.settings.debug_mode) {
+                    this.log(`📦 [SOCache-26] 🗑️ ===== 检测到 ${removed.length} 个对象被移除 =====`);
+                    removed.forEach((obj, idx) => {
+                        this.log(`📦 [SOCache-26]   移除[${idx}] typeId=${obj.typeId}`);
+                        if (obj.typeId === SOCACHE_TYPE_LOBBY) {
+                            this.log(`📦 [SOCache-26]   ✅ Lobby 对象(2004)已移除！`);
+                        }
+                    });
+                }
+                
+                [...modified, ...added].forEach((obj, idx) => {
+                    if (this.settings.debug_mode) {
+                        this.log(`📦 [SOCache-26]   [${idx}] typeId=${obj.typeId}`);
+                    }
+                    
+                    if (obj.typeId === SOCACHE_TYPE_LOBBY) {
+                        if (this.settings.debug_mode) {
+                            this.log(`📦 [SOCache-26]   🎯 发现 CSODOTALobby 类型!`);
+                        }
+                        this.processLobbyData(obj.objectData, `SOCache-26[${idx}]`);
+                    }
+                });
+            } catch (e) {
+                this.log(`📦 [SOCache-26] 解析失败: ${e.message}`);
+            }
+        }
+         // 监听加入结果 (7113)
         else if (cleanMsgType === k_EMsgGCPracticeLobbyJoinResponse) {
              try {
                 const response = CMsgPracticeLobbyJoinResponse.decode(payload);
-                if (response.result === 0) {
-                    this.log('✅ 加入成功 (7113)');
+                const resultCode = response.result || 0;
+                const resultName = JoinResultName[resultCode] || `UNKNOWN_${resultCode}`;
+                
+                if (resultCode === DOTAJoinLobbyResult.DOTA_JOIN_RESULT_SUCCESS) {
+                    if (this.settings.debug_mode) {
+                        this.log('✅ 加入成功 (7113)');
+                    }
                     this.onEnterLobby();
                 } else {
-                    this.log(`❌ 加入失败 (Code: ${response.result}) - 等待 Leader 重试或新信号`);
-                    // Followers 这里可以不做处理，等待下一次信号
+                    // 详细打印失败原因
+                    this.log(`❌ 加入失败: ${resultName}`);
+                    
+                    if (this.settings.debug_mode) {
+                        // 根据错误码给出更详细的说明
+                        switch (resultCode) {
+                            case DOTAJoinLobbyResult.DOTA_JOIN_RESULT_INVALID_LOBBY:
+                                this.log(`   ⚠️ 房间无效/不存在 - GC 可能还未同步或房间已解散`);
+                                break;
+                            case DOTAJoinLobbyResult.DOTA_JOIN_RESULT_LOBBY_FULL:
+                                this.log(`   ⚠️ 房间已满`);
+                                break;
+                            case DOTAJoinLobbyResult.DOTA_JOIN_RESULT_INCORRECT_PASSWORD:
+                                this.log(`   ⚠️ 密码错误`);
+                                break;
+                            case DOTAJoinLobbyResult.DOTA_JOIN_RESULT_CUSTOM_GAME_INCORRECT_VERSION:
+                                this.log(`   ⚠️ 自定义游戏版本不匹配`);
+                                break;
+                        }
+                    }
+                    
                     // 如果是 Leader 失败，可能需要重试创建
                     if (this.role === 'LEADER') {
                          setTimeout(() => this.createLobby(), 5000);
-        }
+                    }
                 }
-             } catch(e) {}
+             } catch(e) {
+                 if (this.settings.debug_mode) {
+                     this.log(`❌ [7113] 解析响应失败: ${e.message}`);
+                 }
+             }
         }
         // 监听 Lobby Update (7430/7367)
         else if (cleanMsgType === 7430 || cleanMsgType === 7367) {
@@ -873,11 +1236,12 @@ class BotClient {
                  const status = CMsgReadyUpStatus.decode(payload);
                 if (status.lobbyId) this.currentLobbyId = status.lobbyId;
                 
-                // [修复] Leader 在播种模式下，收到 ReadyUpStatus 也应启动轮询
-                // 因为某些情况下 7004 不会到达，但 7170 能确认我们在房间里
-                if (this.role === 'LEADER' && this.isSeeding && !this.poll_interval && this.state === 'SEEDING') {
-                    this.log(`🔍 [ReadyUpStatus触发] 启动 Leader 轮询检测 (每 1 秒)`);
-                    this.startLeaderPolling();
+                // [修复] Leader 在播种模式下，收到 ReadyUpStatus 确认我们在房间里
+                if (this.role === 'LEADER' && this.isSeeding && this.state === 'SEEDING') {
+                     // 如果此时还没确认房间 ID，可以利用这个消息来确认（虽然通常 SOCache 更早）
+                     if (!this.currentLobbyId && status.lobbyId && this.settings.debug_mode) {
+                         this.log(`🔍 [ReadyUpStatus] 确认房间 ID: ${status.lobbyId}`);
+                     }
                 }
                 
                 setTimeout(() => this.sendReadyUp(this.currentLobbyId), 200);
@@ -885,15 +1249,145 @@ class BotClient {
         }
     }
 
+    // ============================================
+    // [核心新增] 处理从 SOCache 获取的 Lobby 数据
+    // ============================================
+    processLobbyData(objectData, source) {
+        if (!objectData || objectData.length === 0) {
+            if (this.settings.debug_mode) {
+                this.log(`📦 [${source}] objectData 为空，跳过`);
+            }
+            return;
+        }
+        
+        try {
+            const lobby = CSODOTALobby.decode(objectData);
+            
+            // 获取关键信息
+            const lobbyId = lobby.lobbyId;
+            const gameName = lobby.gameName || '';
+            const leaderId = lobby.leaderId;
+            const state = lobby.state; // 0=UI, 1=SERVERSETUP, 2=RUN, 3=POSTGAME, 4=READYUP, 5=NOTREADY, 6=SERVERASSIGN
+            const allMembers = lobby.allMembers || [];
+            const memberCount = allMembers.length;
+            const customGameId = lobby.customGameId;
+            
+            if (this.settings.debug_mode) {
+                this.log(`📦 [${source}] ========== Lobby 解析成功 ==========`);
+                this.log(`📦 [${source}]   lobbyId: ${lobbyId ? lobbyId.toString() : 'null'}`);
+                this.log(`📦 [${source}]   gameName: "${gameName}"`);
+                this.log(`📦 [${source}]   leaderId: ${leaderId ? leaderId.toString() : 'null'}`);
+                this.log(`📦 [${source}]   state: ${state}`);
+                this.log(`📦 [${source}]   memberCount: ${memberCount}`);
+                this.log(`📦 [${source}]   customGameId: ${customGameId ? customGameId.toString() : 'null'}`);
+            
+                // 详细打印成员列表
+                if (allMembers.length > 0) {
+                    this.log(`📦 [${source}]   👥 房间成员列表 (${allMembers.length}人):`);
+                    const mySteamId = this.steamClient?.steamID?.getSteamID64();
+                    allMembers.forEach((member, idx) => {
+                        const memberId = member.id ? member.id.toString() : 'unknown';
+                        const isMe = mySteamId && memberId === mySteamId;
+                        this.log(`📦 [${source}]      [${idx}] id=${memberId}${isMe ? ' 👈 (我)' : ''}`);
+                    });
+                    
+                    // 检查自己是否还在房间
+                    const imInRoom = allMembers.some(m => m.id && m.id.toString() === mySteamId);
+                    this.log(`📦 [${source}]   🔍 我是否在房间内: ${imInRoom ? '✅ 是' : '❌ 否'}`);
+                }
+                
+                this.log(`📦 [${source}] =====================================`);
+            }
+            
+            // 如果有 lobbyId，更新当前状态
+            if (lobbyId) {
+                const oldLobbyId = this.currentLobbyId;
+                this.currentLobbyId = lobbyId;
+                
+                if (this.settings.debug_mode && (!oldLobbyId || oldLobbyId.toString() !== lobbyId.toString())) {
+                    this.log(`📦 [${source}] 🆔 更新 currentLobbyId: ${oldLobbyId ? oldLobbyId.toString() : 'null'} -> ${lobbyId.toString()}`);
+                }
+                
+                // [核心] Leader 在播种模式下，确认房间创建成功
+                if (this.role === 'LEADER' && this.isSeeding && this.state === 'SEEDING') {
+                    // 检查房间名是否匹配当前正在创建的房间
+                    const expectedRoomName = `Bot Room ${this.fleetId} #${this.currentRoomNumber}`;
+                    
+                    if (gameName === expectedRoomName || gameName.includes(this.fleetId)) {
+                        // ✅ 房间名匹配，现在才清除重试定时器
+                        if (this.creationTimeout) {
+                            clearTimeout(this.creationTimeout);
+                            this.creationTimeout = null;
+                            if (this.settings.debug_mode) {
+                                this.log(`📦 [${source}] ⏱️ 清除创建超时定时器`);
+                            }
+                        }
+                        
+                        this.log(`✅ 房间 "${gameName}" 创建成功 (人数: ${memberCount})`);
+                        if (this.settings.debug_mode) {
+                            this.log(`📦 [${source}]    房间ID: ${lobbyId.toString()}`);
+                        }
+                        
+                        // 更新成员计数
+                        this.currentRoomMemberCount = memberCount;
+                        
+                        // 重置 missingRoomCount，因为我们确认房间存在
+                        this.missingRoomCount = 0;
+                        
+                        // 通知 FleetManager 设置确认的房间
+                        if (this.manager) {
+                            this.manager.setConfirmedLobby(lobbyId, gameName, this.currentRoomNumber, memberCount);
+                        }
+                        
+                        // 检测人数变化（有人加入）
+                        if (memberCount > 1) {
+                            this.log(`👥 Follower 已加入 (${memberCount}人)`);
+                            
+                            // 清除确认的房间（因为我们要离开了）
+                            if (this.manager) {
+                                this.manager.clearConfirmedLobby();
+                            }
+                            
+                            // 触发重连
+                            this.reconnectAndSeed();
+                        }
+                    } else if (this.settings.debug_mode) {
+                        this.log(`📦 [${source}] ⚠️ 房间名不匹配: 期望"${expectedRoomName}", 实际"${gameName}"`);
+                    }
+                }
+                
+                // Follower 也可以通过 SOCache 确认加入成功
+                if (this.role === 'FOLLOWER' && this.state !== 'IN_LOBBY') {
+                    // 检查是否是我们车队的房间
+                    if (gameName.includes(this.fleetId)) {
+                        this.log(`✅ 成功加入房间: "${gameName}"`);
+                        this.onEnterLobby(true);
+                    }
+                }
+            }
+            
+        } catch (e) {
+            this.log(`📦 [${source}] CSODOTALobby 解析失败: ${e.message}`);
+            if (this.settings.debug_mode) {
+                // 打印部分原始数据用于调试
+                this.log(`📦 [${source}] Raw data (hex, first 64 bytes): ${objectData.slice(0, 64).toString('hex')}`);
+            }
+        }
+    }
+
     onEnterLobby(isSnapshot = false) {
         // [修正] Leader 在播种模式下，必须保持 SEEDING 状态，不能变成 IN_LOBBY
         // 否则会导致 7004 消息处理逻辑中无法启动轮询
         if (this.role === 'LEADER' && this.isSeeding) {
-            this.log('🏁 [播种模式] 保持 SEEDING 状态，执行进房初始化...');
+            if (this.settings.debug_mode) {
+                this.log('🏁 [播种模式] 保持 SEEDING 状态，执行进房初始化...');
+            }
         } else {
             if (this.state === 'IN_LOBBY') return;
             this.state = 'IN_LOBBY';
-            this.log('🏁 进入房间状态维护模式');
+            if (this.settings.debug_mode) {
+                this.log('🏁 进入房间状态维护模式');
+            }
                  }
                  
         // 设置队伍 & 初始 Ready
@@ -937,6 +1431,10 @@ class BotClient {
 }
 
 // --- Main ---
+// [新增] 解析命令行参数
+const args = process.argv.slice(2);
+const isDebugMode = args.includes('debug');
+
 let config;
              try {
     const rawContent = fs.readFileSync('./config.json', 'utf8').replace(/^\uFEFF/, '');
@@ -949,12 +1447,27 @@ let config;
 const fleets = config.fleets || [];
 const globalSettings = config.global_settings;
 
+// [新增] 强制覆盖 debug_mode 配置，使用命令行参数
+globalSettings.debug_mode = isDebugMode;
+
 if (fleets.length === 0) {
     console.error("❌ 未找到车队配置 (config.fleets)");
     process.exit(1);
 }
 
-console.log(`[System] 加载了 ${fleets.length} 个车队配置`);
+if (isDebugMode) {
+    console.log(`[System] 🚀 启动模式: 调试模式 (详细日志)`);
+    console.log(`[System] 加载了 ${fleets.length} 个车队配置`);
+} else {
+    console.log(`[System] 🚀 Dota2 Arcade Bot 启动 (生产模式)`);
+    console.log(`[System] 车队数量: ${fleets.length}`);
+    
+    // 统计总 Bot 数量
+    const totalBots = fleets.reduce((sum, f) => sum + 1 + (f.followers?.length || 0), 0);
+    console.log(`[System] Bot 总数: ${totalBots} (${fleets.reduce((sum, f) => sum + 1, 0)} Leaders + ${fleets.reduce((sum, f) => sum + (f.followers?.length || 0), 0)} Followers)`);
+    console.log(`[System] 开始连接 Steam 并创建房间...\n`);
+}
+
 const fleetManagers = [];
 
 fleets.forEach(fleetConfig => {
@@ -964,6 +1477,9 @@ fleets.forEach(fleetConfig => {
 });
 
 process.on('SIGINT', () => {
+    if (!isDebugMode) {
+        process.stdout.write('\n'); // 清除进度条
+    }
     console.log("\n[System] 正在退出...");
     fleetManagers.forEach(f => f.cleanup());
     setTimeout(() => process.exit(0), 2000);
