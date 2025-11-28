@@ -3,11 +3,11 @@
     "target_app_id": 570,
     "custom_game_id": "3586896069",
     "server_region": 14,
-    "lobby_password": "123",
-    "max_players_per_room": 4,
+    "lobby_password": "",
+    "max_players_per_room": 23,
     "seeding_mode": true,
     "debug_mode": true,
-    "debug_max_bots_per_room": 3
+    "debug_max_bots_per_room": 22
   },
   "fleets": [
     {
@@ -18,81 +18,106 @@
         "shared_secret": "" 
       },
       "followers": [
-        { 
-          "username": "hkinzkccm679426", 
-          "password": "8m4Xf4xShad3",
-          "shared_secret": ""
-        },
-        { 
-          "username": "xkvypeemb629862", 
-          "password": "Us6iFiOKbO5y",
-          "shared_secret": ""
-        },
-        { 
-          "username": "dqmunjfkn376151", 
-          "password": "jtmK9yuJEk2G",
-          "shared_secret": ""
-        },
-        { 
-          "username": "hsgwmmlih035296", 
-          "password": "w7xfkQl4F3BS",
-          "shared_secret": ""
-        },
-        { 
-          "username": "mjqvzyqwn316084", 
-          "password": "pswKOiRdCTJ1",
-          "shared_secret": ""
-        },
-        { 
-          "username": "vmuwehmlz296310", 
-          "password": "bhSUwufi2mNm",
-          "shared_secret": ""
-        },
-        { 
-          "username": "bywalkiqh300495", 
-          "password": "pNDxsL2E8e0Y",
-          "shared_secret": ""
-        },
-        { 
-          "username": "fqibwtvtd531835", 
-          "password": "BTzAubsiUXCJ",
-          "shared_secret": ""
-        },
-        { 
-          "username": "uahbtdrex143963", 
-          "password": "CcKh9elgFTs4",
-          "shared_secret": ""
-        },
-        { 
-          "username": "nlvvcjgii370740", 
-          "password": "AvfTklPqfsaJ",
-          "shared_secret": ""
-        },
-        { 
-          "username": "czsgtgksm784972", 
-          "password": "WzRO2f69YUGB",
-          "shared_secret": ""
-        },
-        { 
-          "username": "eldjshpct141874", 
-          "password": "6Li4XtPrJC9U",
-          "shared_secret": ""
-        },
-        { 
-          "username": "cnymczgow205975", 
-          "password": "dVXAp1ND0Lq8",
-          "shared_secret": ""
-        },
-        { 
-          "username": "dgbmaylct573132", 
-          "password": "jVTxBmBjJOAJ",
-          "shared_secret": ""
-        },
-        { 
-          "username": "iqzjjmuaj363451", 
-          "password": "DaAblpcdhDcm",
-          "shared_secret": ""
-        }
+        { "username": "hkinzkccm679426", "password": "8m4Xf4xShad3", "shared_secret": "" },
+        { "username": "xkvypeemb629862", "password": "Us6iFiOKbO5y", "shared_secret": "" },
+        { "username": "dqmunjfkn376151", "password": "jtmK9yuJEk2G", "shared_secret": "" },
+        { "username": "hsgwmmlih035296", "password": "w7xfkQl4F3BS", "shared_secret": "" },
+        { "username": "mjqvzyqwn316084", "password": "pswKOiRdCTJ1", "shared_secret": "" },
+        { "username": "vmuwehmlz296310", "password": "bhSUwufi2mNm", "shared_secret": "" },
+        { "username": "bywalkiqh300495", "password": "pNDxsL2E8e0Y", "shared_secret": "" },
+        { "username": "fqibwtvtd531835", "password": "BTzAubsiUXCJ", "shared_secret": "" },
+        { "username": "uahbtdrex143963", "password": "CcKh9elgFTs4", "shared_secret": "" },
+        { "username": "nlvvcjgii370740", "password": "AvfTklPqfsaJ", "shared_secret": "" },
+        { "username": "czsgtgksm784972", "password": "WzRO2f69YUGB", "shared_secret": "" },
+        { "username": "eldjshpct141874", "password": "6Li4XtPrJC9U", "shared_secret": "" },
+        { "username": "cnymczgow205975", "password": "dVXAp1ND0Lq8", "shared_secret": "" },
+        { "username": "dgbmaylct573132", "password": "jVTxBmBjJOAJ", "shared_secret": "" },
+        { "username": "iqzjjmuaj363451", "password": "DaAblpcdhDcm", "shared_secret": "" },
+        { "username": "ydehltqwm121276", "password": "C64BGHrujqjE", "shared_secret": "" },
+        { "username": "umwwlcpnn146274", "password": "FcttLUFO6xiC", "shared_secret": "" },
+        { "username": "rqukhhtnr945285", "password": "F1wbh0WYpOmw", "shared_secret": "" },
+        { "username": "pshxbwaht053864", "password": "XCmYMjyvWylJ", "shared_secret": "" },
+        { "username": "jccstjamq914973", "password": "15yDsOqprZjM", "shared_secret": "" },
+        { "username": "rzonbbcmn446107", "password": "MkfYKy5pRZ1A", "shared_secret": "" },
+        { "username": "goblypsjb812655", "password": "iRzXUreWCRVn", "shared_secret": "" },
+        { "username": "chnjhvqlh636650", "password": "Tae6wcFEGmab", "shared_secret": "" },
+        { "username": "veztckknw344898", "password": "W1CU0QYyTcK0", "shared_secret": "" },
+        { "username": "dgutcmnss281537", "password": "0rVYhHp8HlPK", "shared_secret": "" },
+        { "username": "eubrajhly459900", "password": "u8uoLdbCnLrl", "shared_secret": "" },
+        { "username": "wekphqokw218395", "password": "vZxCXaDm0dBn", "shared_secret": "" },
+        { "username": "xiaxzwcwy437075", "password": "kpl7jBVyiQNc", "shared_secret": "" },
+        { "username": "gocdxcnqf494118", "password": "cKF6k4poKBOn", "shared_secret": "" },
+        { "username": "prvgudcoo473611", "password": "CurZ0wOR4pBL", "shared_secret": "" },
+        { "username": "nrbnzfjla867438", "password": "sJc0rGTRwyQS", "shared_secret": "" },
+        { "username": "enafielzc127564", "password": "kXHPkluawUEe", "shared_secret": "" },
+        { "username": "yiherzvph479751", "password": "ZHCI2w0OFzdS", "shared_secret": "" },
+        { "username": "odvfiobhn960886", "password": "MqflkRFgjq2o", "shared_secret": "" },
+        { "username": "qbkhywiwq243174", "password": "dWhXNIctku01", "shared_secret": "" },
+        { "username": "lqthwoykx247309", "password": "ar7cjVMIuL64", "shared_secret": "" },
+        { "username": "wrkzxmomg094200", "password": "Qy47v31OSTZq", "shared_secret": "" },
+        { "username": "dlpqcfmax964715", "password": "6YdssNQAEZYf", "shared_secret": "" },
+        { "username": "gzaidswzr401173", "password": "ACJURPeDoBjM", "shared_secret": "" },
+        { "username": "vgbxpvarm502884", "password": "IoIgAzyiJL1T", "shared_secret": "" },
+        { "username": "icmaumada913341", "password": "Lqb11wHe54YQ", "shared_secret": "" },
+        { "username": "tzsuncgim393098", "password": "AQOWZVaTRQzG", "shared_secret": "" },
+        { "username": "qnirlqbco754164", "password": "qUN3w4IbihB3", "shared_secret": "" },
+        { "username": "yujnmhrfa514971", "password": "uDh9q8ZVIMMH", "shared_secret": "" },
+        { "username": "cynpgxnwv003914", "password": "4fxgd3uMbwyc", "shared_secret": "" },
+        { "username": "iwysizrmu431640", "password": "0gl5LRDQ3sVm", "shared_secret": "" },
+        { "username": "gdqvlrywp291652", "password": "FA6t6JPF3ywc", "shared_secret": "" },
+        { "username": "sankyvayk163961", "password": "6scIgefGk3m5", "shared_secret": "" },
+        { "username": "iqbhrbacz435754", "password": "2EzkOE4RGGkI", "shared_secret": "" },
+        { "username": "exmeftfdk058731", "password": "JGwpQrnyi2d3", "shared_secret": "" },
+        { "username": "diplzdsuh310874", "password": "dXBWb9oSeKq4", "shared_secret": "" },
+        { "username": "faigowrxo498540", "password": "mmUEKpNqv7GA", "shared_secret": "" },
+        { "username": "tyfhehgwu977764", "password": "dDyGwmxBL8Ys", "shared_secret": "" },
+        { "username": "dpwftsnxb409417", "password": "pmYncPDHnkYI", "shared_secret": "" },
+        { "username": "zdomhcocx861653", "password": "JJ2yK3npzDPI", "shared_secret": "" },
+        { "username": "cjsbgirzt326146", "password": "Sb1dinUcv0Lq", "shared_secret": "" },
+        { "username": "aymkhtrim499997", "password": "v1BdI3s5Gxfa", "shared_secret": "" },
+        { "username": "yndmrlern269963", "password": "yeOeHiyt3G8K", "shared_secret": "" },
+        { "username": "bsmdzmllv824206", "password": "3UTMqiJe3eoq", "shared_secret": "" },
+        { "username": "kmwyvknrl195353", "password": "ogWmNed77KtY", "shared_secret": "" },
+        { "username": "uwuojxqzj145439", "password": "tfsRRizSJbBM", "shared_secret": "" },
+        { "username": "iaqpzflsx619925", "password": "0YYOrf7SSMjX", "shared_secret": "" },
+        { "username": "sshkwdocz747352", "password": "AXrqBCbUpeAZ", "shared_secret": "" },
+        { "username": "ephwefjkq092975", "password": "YQKXXhyoxnkr", "shared_secret": "" },
+        { "username": "thlkbmarn602775", "password": "Bw4gdTyXGxQo", "shared_secret": "" },
+        { "username": "iwgahfnfc742974", "password": "91QDm3GlHF0V", "shared_secret": "" },
+        { "username": "niqujauto255532", "password": "oLhY8g1wmAXj", "shared_secret": "" },
+        { "username": "nmeqzdamd104629", "password": "wGPm7gfhp1ww", "shared_secret": "" },
+        { "username": "mcqnvjsyc077578", "password": "LXUurUH4v28i", "shared_secret": "" },
+        { "username": "xjrluvqpd675720", "password": "zN1EhcWH05R5", "shared_secret": "" },
+        { "username": "umhgfnudr868853", "password": "OW8Hc6X4pWq4", "shared_secret": "" },
+        { "username": "pcqfexgvi964117", "password": "K8xEG6pYgREH", "shared_secret": "" },
+        { "username": "dqfdymhzj559965", "password": "FrY4alVYsXxB", "shared_secret": "" },
+        { "username": "esdocktxs645241", "password": "nTEhqJLuyPdG", "shared_secret": "" },
+        { "username": "kvhrcthhg183108", "password": "RoTXVxtFZAg2", "shared_secret": "" },
+        { "username": "uhskkfapr776531", "password": "kw3oQaPCcuxQ", "shared_secret": "" },
+        { "username": "sedkaqlqb884390", "password": "2ThkQeps5TDe", "shared_secret": "" },
+        { "username": "srukccuke108649", "password": "IBvV6krAl2W2", "shared_secret": "" },
+        { "username": "kbvrycpfp068854", "password": "DYPWKUnsn3Ux", "shared_secret": "" },
+        { "username": "odmhwjrxe138340", "password": "2jKwx9HkuzxY", "shared_secret": "" },
+        { "username": "ncnghrgpb168429", "password": "xs6Lg6m6j3ld", "shared_secret": "" },
+        { "username": "xrsjhqide620517", "password": "8pHSzY1pianF", "shared_secret": "" },
+        { "username": "jjfrtdkkn192022", "password": "r7Y83EXtUvaP", "shared_secret": "" },
+        { "username": "ylvksagcv977530", "password": "lCH9rnDGCEO9", "shared_secret": "" },
+        { "username": "clvbtrhfy865229", "password": "UdzoTGPbggld", "shared_secret": "" },
+        { "username": "iwhnmlpwf596643", "password": "PWAG35szaP22", "shared_secret": "" },
+        { "username": "ywctjgcus829751", "password": "KFPNxUzseak2", "shared_secret": "" },
+        { "username": "uveahxvlx486410", "password": "3bspyh6n5MJA", "shared_secret": "" },
+        { "username": "ghakofevp557382", "password": "BeUBy0cSdgCB", "shared_secret": "" },
+        { "username": "ziiupfpqr648621", "password": "fGXRl4aG8hKF", "shared_secret": "" },
+        { "username": "oalndiidd579654", "password": "3GPkeGCZ7kkL", "shared_secret": "" },
+        { "username": "qwpdcornh323196", "password": "keQOS11wKsMv", "shared_secret": "" },
+        { "username": "aqphhibcn660742", "password": "A27WZwavGqBM", "shared_secret": "" },
+        { "username": "tyxymhvuv334551", "password": "WfL0ybIDiEJ7", "shared_secret": "" },
+        { "username": "vdgnbjtcy897871", "password": "v71x5q1amLEa", "shared_secret": "" },
+        { "username": "lqrwgykvg559866", "password": "8d9JAWXaaO4f", "shared_secret": "" },
+        { "username": "uqlusjoyu633234", "password": "QTmlS3Hb9R8o", "shared_secret": "" },
+        { "username": "ggmixayov857575", "password": "Nkyg0nYqxbON", "shared_secret": "" },
+        { "username": "iolvmetdi774065", "password": "Ok0hINvvMsX0", "shared_secret": "" },
+        { "username": "wetqhldqj617184", "password": "ZSDBMfg2WT1I", "shared_secret": "" }
       ]
     }
   ]

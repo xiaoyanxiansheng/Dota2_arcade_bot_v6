@@ -4,6 +4,20 @@ const protobuf = require('protobufjs');
 const Long = require('protobufjs').util.Long;
 const fs = require('fs');
 
+// [新增] 读取代理列表
+let proxies = [];
+try {
+    if (fs.existsSync('./proxies.txt')) {
+        const content = fs.readFileSync('./proxies.txt', 'utf8');
+        proxies = content.split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0);
+        console.log(`[System] 加载了 ${proxies.length} 个代理 IP`);
+    }
+} catch (e) {
+    console.error("⚠️ 读取代理文件失败: " + e.message);
+}
+
 // 消息 ID 定义
 const k_EMsgGCClientHello = 4006;
 const k_EMsgGCClientConnectionStatus = 4004;
@@ -138,7 +152,7 @@ function getHardwareSpecs() {
 
 // --- Fleet Manager ---
 class FleetManager {
-    constructor(fleetConfig, globalSettings) {
+    constructor(fleetConfig, globalSettings, globalAccountOffset = 0) {
         this.id = fleetConfig.id || 'unknown_fleet';
         this.config = fleetConfig;
         this.settings = globalSettings;
@@ -156,6 +170,9 @@ class FleetManager {
         // [进度条] 统计信息
         this.totalBots = 1 + (fleetConfig.followers?.length || 0); // Leader + Followers
         this.progressInterval = null; // 进度条更新定时器
+        
+        // [新增] 全局账号偏移量（用于多车队代理分配）
+        this.globalAccountOffset = globalAccountOffset;
     }
     
     // [进度条] 启动进度统计（每秒查询一次）
@@ -326,13 +343,24 @@ class FleetManager {
         this.confirmedLobby = null;
     }
 
-    start() {
+    start(leaderIndex = 0) {
         if (this.settings.debug_mode) {
             console.log(`\n[Fleet:${this.id}] 🚀 车队启动! Leader: ${this.config.leader.username}`);
         }
 
+        // [新增] 代理分配参数
+        const accountsPerProxy = this.settings.accounts_per_proxy;
+        if (proxies.length > 0 && this.settings.debug_mode && this.globalAccountOffset === 0) {
+            console.log(`[System] 代理分配策略: 主号固定 IP，小号每 ${accountsPerProxy} 个账号使用 1 个 IP`);
+        }
+
         // 1. 启动 Leader (传入 fleetId 和 manager)
-        const leaderBot = new BotClient(this.config.leader, this.settings, 'LEADER', this.id, this);
+        // [关键修改] Leader 固定使用对应编号的代理（leaderIndex 对应 proxyIndex）
+        let leaderProxy = null;
+        if (proxies.length > 0) {
+            leaderProxy = proxies[leaderIndex]; // 主号1用代理1，主号2用代理2，依此类推
+        }
+        const leaderBot = new BotClient(this.config.leader, this.settings, 'LEADER', this.id, this, leaderProxy);
         this.bots.push(leaderBot);
         leaderBot.start();
 
@@ -342,7 +370,18 @@ class FleetManager {
                 if (this.settings.debug_mode) {
                     console.log(`[Fleet:${this.id}] 启动 Follower ${idx+1}: ${acc.username}`);
                 }
-                const bot = new BotClient(acc, this.settings, 'FOLLOWER', this.id, this);
+                
+                // [关键修改] Follower 从主号数量之后的代理开始分配
+                let followerProxy = null;
+                if (proxies.length > 0) {
+                    // 全局小号索引（跨车队）
+                    const globalFollowerIndex = this.globalAccountOffset + idx;
+                    // 从主号数量之后的代理开始，按 accountsPerProxy 分配
+                    const proxyIndex = (leaderIndex + 1) + Math.floor(globalFollowerIndex / accountsPerProxy);
+                    followerProxy = proxies[proxyIndex % proxies.length];
+                }
+
+                const bot = new BotClient(acc, this.settings, 'FOLLOWER', this.id, this, followerProxy);
                 this.bots.push(bot);
                 bot.start();
             }, 5000 + (idx * 3000)); // Leader 先跑5秒，然后每个Follower间隔3秒
@@ -365,17 +404,29 @@ class FleetManager {
                 
 // --- Bot Client ---
 class BotClient {
-    constructor(account, settings, role, fleetId, manager) {
+    constructor(account, settings, role, fleetId, manager, proxy) {
         this.account = account;
         this.settings = settings;
         this.role = role; // 'LEADER' | 'FOLLOWER'
         this.fleetId = fleetId; // 车队 ID，用于识别房间
         this.manager = manager; // [新增] 全局管理器引用
-        
-        // [修改] 显式指定数据目录，与 login_leader.js 保持一致
-        this.client = new SteamUser({
+        this.proxy = proxy; // [新增] 代理地址
+
+        // [修改] 显式指定数据目录，并应用代理配置
+        const steamOptions = {
             dataDirectory: "./steam_data"
-        });
+        };
+        
+        if (this.proxy) {
+            steamOptions.httpProxy = this.proxy;
+            if (this.settings.debug_mode) {
+                // 简单的代理脱敏显示
+                const proxyDisplay = this.proxy.replace(/:[^:@]+@/, ':****@');
+                console.log(`[${this.account.username}] 🛡️ 使用代理: ${proxyDisplay}`);
+            }
+        }
+
+        this.client = new SteamUser(steamOptions);
         this.is_gc_connected = false;
         this.currentLobbyId = null;
         this.ready_up_heartbeat = null;
@@ -444,8 +495,20 @@ class BotClient {
                     this.log('🎮 Dota 2 启动');
                 }
                 setTimeout(() => this.connectGC(), 2000);
-        }
-    });
+            }
+        });
+
+        // [新增] 全局错误处理，防止 LoggedInElsewhere 导致进程崩溃
+        this.client.on('error', (err) => {
+            this.error(`Steam 客户端错误: ${err.message}`);
+            
+            // 针对 LoggedInElsewhere 的特殊处理
+            if (err.message === 'LoggedInElsewhere') {
+                this.log(`⚠️ 账号被踢下线 (LoggedInElsewhere) - 可能是重复登录或异地登录`);
+                // 这里可以选择尝试重连，或者只是保持静默失败以免无限循环
+                // this.client.logOn(...); 
+            }
+        });
 
         this.client.on('receivedFromGC', (appid, msgType, payload) => this.handleGCMessage(appid, msgType, payload));
     }
@@ -682,24 +745,21 @@ class BotClient {
             // [新增] 创建超时重试机制
             if (this.creationTimeout) clearTimeout(this.creationTimeout);
             this.creationTimeout = setTimeout(() => {
-                // 如果 15 秒后还在 SEEDING 状态
+                // 如果 15 秒后还在 SEEDING 状态，且定时器未被清除，说明没收到确认
                 if (this.state === 'SEEDING') {
-                    // 只有当确实没有收到正确的房间确认时才重试
-                    if (!this.currentLobbyId || this.currentRoomMemberCount === 0) {
-                        this.log(`⚠️ 创建房间超时（15秒无确认），重试创建...`);
-                        if (this.settings.debug_mode) {
-                            this.log(`   [DEBUG] currentLobbyId=${this.currentLobbyId ? this.currentLobbyId.toString() : 'null'}, memberCount=${this.currentRoomMemberCount}`);
-                        }
-                        
-                        // 清空旧状态，强制重新创建
-                        this.currentLobbyId = null;
-                        this.currentRoomMemberCount = 1;
-                        
-                        this.roomsCreated--; // 回退计数，重新创建同一个房间
-                        this.createLobbyAndSeed();
-                    } else if (this.settings.debug_mode) {
-                        this.log(`✅ [超时检查] 房间已确认，无需重试`);
+                    // [修复] 移除对 currentLobbyId 的检查，因为它可能残留旧房间的 ID，导致判断错误
+                    // 只要定时器触发了，就意味着超时，无需其他条件
+                    this.log(`⚠️ 创建房间超时（15秒无确认），重试创建...`);
+                    if (this.settings.debug_mode) {
+                        this.log(`   [DEBUG] 强制重试 (currentLobbyId=${this.currentLobbyId ? this.currentLobbyId.toString() : 'null'})`);
                     }
+                    
+                    // 清空旧状态，强制重新创建
+                    this.currentLobbyId = null;
+                    this.currentRoomMemberCount = 1;
+                    
+                    this.roomsCreated--; // 回退计数，重新创建同一个房间
+                    this.createLobbyAndSeed();
                 }
             }, 15000);
 
@@ -1286,7 +1346,7 @@ class BotClient {
                 // 详细打印成员列表
                 if (allMembers.length > 0) {
                     this.log(`📦 [${source}]   👥 房间成员列表 (${allMembers.length}人):`);
-                    const mySteamId = this.steamClient?.steamID?.getSteamID64();
+                    const mySteamId = this.client?.steamID?.getSteamID64();
                     allMembers.forEach((member, idx) => {
                         const memberId = member.id ? member.id.toString() : 'unknown';
                         const isMe = mySteamId && memberId === mySteamId;
@@ -1446,11 +1506,59 @@ let config;
     process.exit(1);
 }
 
-const fleets = config.fleets || [];
+let fleets = config.fleets || [];
 const globalSettings = config.global_settings;
 
 // [新增] 强制覆盖 debug_mode 配置，使用命令行参数
 globalSettings.debug_mode = isDebugMode;
+
+// [新增] 自动分配车队逻辑
+// 检查是否使用新格式（leader 和 followers 是数组）
+if (fleets.length > 0 && Array.isArray(fleets[0].leader)) {
+    const sourceFleet = fleets[0];
+    const leaders = sourceFleet.leader || [];
+    const followers = sourceFleet.followers || [];
+    
+    if (leaders.length === 0) {
+        console.error("❌ 未找到任何主号配置 (fleets[0].leader)");
+        process.exit(1);
+    }
+    
+    // 计算每个车队分配的小号数量
+    const followersPerFleet = Math.floor(followers.length / leaders.length);
+    const remainingFollowers = followers.length % leaders.length;
+    
+    if (isDebugMode) {
+        console.log(`[System] 🔄 自动分配车队:`);
+        console.log(`[System]    主号数量: ${leaders.length}`);
+        console.log(`[System]    小号数量: ${followers.length}`);
+        console.log(`[System]    每个车队: ${followersPerFleet} 个小号`);
+        if (remainingFollowers > 0) {
+            console.log(`[System]    前 ${remainingFollowers} 个车队额外分配 1 个小号`);
+        }
+    }
+    
+    // 重新构建 fleets 数组
+    fleets = [];
+    let followerIndex = 0;
+    
+    leaders.forEach((leaderAccount, idx) => {
+        // 计算当前车队的小号数量（前几个车队可能多分配1个）
+        const currentFollowerCount = followersPerFleet + (idx < remainingFollowers ? 1 : 0);
+        const currentFollowers = followers.slice(followerIndex, followerIndex + currentFollowerCount);
+        followerIndex += currentFollowerCount;
+        
+        fleets.push({
+            id: `fleet_${idx + 1}`,
+            leader: leaderAccount,  // 单个对象
+            followers: currentFollowers
+        });
+    });
+    
+    if (isDebugMode) {
+        console.log(`[System] ✅ 已创建 ${fleets.length} 个车队\n`);
+    }
+}
 
 if (fleets.length === 0) {
     console.error("❌ 未找到车队配置 (config.fleets)");
@@ -1472,10 +1580,16 @@ if (isDebugMode) {
 
 const fleetManagers = [];
 
-fleets.forEach(fleetConfig => {
-    const fleet = new FleetManager(fleetConfig, globalSettings);
+// [新增] 计算全局账号偏移量（只计算 Followers，不包括 Leaders）
+let globalFollowerOffset = 0;
+
+fleets.forEach((fleetConfig, leaderIndex) => {
+    const fleet = new FleetManager(fleetConfig, globalSettings, globalFollowerOffset);
     fleetManagers.push(fleet);
-    fleet.start();
+    fleet.start(leaderIndex); // 传入 leaderIndex 用于固定代理分配
+    
+    // 更新全局偏移量：只累加当前车队的 Followers
+    globalFollowerOffset += (fleetConfig.followers?.length || 0);
 });
 
 process.on('SIGINT', () => {
