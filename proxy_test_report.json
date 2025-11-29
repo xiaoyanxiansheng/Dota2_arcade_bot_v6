@@ -1,0 +1,999 @@
+{
+  "testTime": "2025-11-29T02:04:30.589Z",
+  "total": 198,
+  "valid": 198,
+  "invalid": 0,
+  "validRate": "100.00%",
+  "details": [
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.38.78.159:6096",
+      "latency": 1453
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@64.137.58.224:6470",
+      "latency": 1513
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.239.33.125:6480",
+      "latency": 1752
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@208.70.11.36:6117",
+      "latency": 1719
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.109.219.238:6462",
+      "latency": 1827
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.91.166.133:7192",
+      "latency": 1118
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@46.202.79.118:7128",
+      "latency": 1788
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.22.224.200:7532",
+      "latency": 1206
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@108.165.53.181:6920",
+      "latency": 1704
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@166.88.3.223:6694",
+      "latency": 1177
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@206.206.73.249:6865",
+      "latency": 1666
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.61.124.105:6434",
+      "latency": 1263
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@154.6.8.21:5488",
+      "latency": 1407
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@89.249.194.26:6425",
+      "latency": 1838
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.95.250.96:6369",
+      "latency": 1395
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@109.196.161.254:6702",
+      "latency": 1719
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@173.211.0.253:6746",
+      "latency": 1566
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.41.169.101:6762",
+      "latency": 2401
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.61.127.202:6141",
+      "latency": 1473
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.85.129.178:6656",
+      "latency": 2145
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@192.198.126.224:7267",
+      "latency": 1241
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.26.231.36:7277",
+      "latency": 1816
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.14.83.74:8052",
+      "latency": 1702
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.39.4.205:5630",
+      "latency": 1632
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@94.177.49.104:6120",
+      "latency": 1816
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@154.29.25.208:7219",
+      "latency": 1503
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@172.120.119.63:5723",
+      "latency": 1344
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.95.255.244:6828",
+      "latency": 1383
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@31.223.188.113:5790",
+      "latency": 1700
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.39.96.224:5637",
+      "latency": 1760
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@85.198.45.200:6124",
+      "latency": 2048
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@148.135.148.112:6105",
+      "latency": 1510
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@50.114.28.121:5606",
+      "latency": 1237
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@140.99.207.32:5409",
+      "latency": 1712
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.253.223.212:5620",
+      "latency": 1700
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@173.211.69.122:6715",
+      "latency": 1301
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.27.138.250:6351",
+      "latency": 1347
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.23.221.77:6407",
+      "latency": 1205
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@206.206.124.230:6811",
+      "latency": 1523
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.23.237.216:7550",
+      "latency": 1624
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.253.13.2:5434",
+      "latency": 2470
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@140.99.202.175:6053",
+      "latency": 1727
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@142.111.124.76:6096",
+      "latency": 1363
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@198.23.239.64:6470",
+      "latency": 1648
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.236.216.3:6033",
+      "latency": 1279
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.131.95.24:5688",
+      "latency": 1689
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.112.82.188:5423",
+      "latency": 1747
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@108.165.63.6:5743",
+      "latency": 2225
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@172.120.112.217:5896",
+      "latency": 1354
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@209.242.201.129:6175",
+      "latency": 1449
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.26.95.92:5574",
+      "latency": 1529
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.252.28.206:6144",
+      "latency": 1463
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.39.17.169:5592",
+      "latency": 1354
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@84.33.241.159:6516",
+      "latency": 1351
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@152.232.116.140:8682",
+      "latency": 1269
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@185.15.178.39:5723",
+      "latency": 1507
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@31.56.137.74:6150",
+      "latency": 1795
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@154.6.87.119:6589",
+      "latency": 1541
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@198.23.128.87:5715",
+      "latency": 1683
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@31.56.137.5:6081",
+      "latency": 1660
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@64.137.8.241:6923",
+      "latency": 1518
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.112.85.214:5949",
+      "latency": 1454
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.61.98.96:5780",
+      "latency": 1355
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.23.206.245:6051",
+      "latency": 1426
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.29.210.108:7951",
+      "latency": 1684
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@107.173.150.227:6681",
+      "latency": 1465
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.29.237.105:7914",
+      "latency": 1285
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.151.161.236:6327",
+      "latency": 1206
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.22.214.215:6067",
+      "latency": 1465
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.24.249.136:5973",
+      "latency": 1083
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@161.123.154.4:6534",
+      "latency": 1298
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.95.255.218:6802",
+      "latency": 1381
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@140.99.207.185:5562",
+      "latency": 1717
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.23.204.163:6995",
+      "latency": 1311
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@108.165.218.139:5878",
+      "latency": 1587
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.112.171.195:6163",
+      "latency": 1910
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.113.1.88:5788",
+      "latency": 1402
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@86.38.26.73:6238",
+      "latency": 1339
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@198.154.89.54:6145",
+      "latency": 1184
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.168.25.177:5859",
+      "latency": 1581
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@185.15.179.8:5974",
+      "latency": 1749
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.41.176.104:6402",
+      "latency": 1234
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.27.240.63:6871",
+      "latency": 1645
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@64.137.99.149:5782",
+      "latency": 1485
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.253.91.180:6613",
+      "latency": 2386
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@166.88.195.226:5858",
+      "latency": 1132
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@31.56.137.243:6319",
+      "latency": 1439
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.91.166.204:7263",
+      "latency": 1193
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@161.123.130.246:5917",
+      "latency": 1698
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@191.101.11.193:6591",
+      "latency": 1341
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.253.180.117:6530",
+      "latency": 1679
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@107.174.215.26:7967",
+      "latency": 1365
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@216.173.74.144:5824",
+      "latency": 927
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.150.177.176:5549",
+      "latency": 1602
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.112.95.184:6919",
+      "latency": 1296
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@140.233.166.174:7207",
+      "latency": 1475
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.25.245.40:7363",
+      "latency": 2306
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@192.241.104.120:8214",
+      "latency": 1271
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.24.232.119:6948",
+      "latency": 1128
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@109.196.161.167:6615",
+      "latency": 1376
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@64.137.14.237:5903",
+      "latency": 1525
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.22.223.168:6519",
+      "latency": 1430
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@43.229.11.236:5874",
+      "latency": 2147
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@77.83.233.196:6814",
+      "latency": 1437
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@146.103.3.47:7100",
+      "latency": 1050
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@154.73.250.160:6061",
+      "latency": 1757
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.38.114.31:5944",
+      "latency": 1485
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@142.147.129.207:5816",
+      "latency": 1475
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@184.174.58.90:5652",
+      "latency": 1588
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@50.114.242.46:6283",
+      "latency": 2213
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.23.239.124:6461",
+      "latency": 1363
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.233.20.194:6210",
+      "latency": 1645
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.253.212.203:5613",
+      "latency": 1543
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.232.209.88:6046",
+      "latency": 1309
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.112.148.51:6496",
+      "latency": 1228
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@140.99.194.102:7479",
+      "latency": 1608
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.94.138.200:6474",
+      "latency": 1326
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.26.154.39:6776",
+      "latency": 2126
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.26.154.168:6905",
+      "latency": 2237
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.41.162.238:6875",
+      "latency": 1230
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@152.232.116.151:8693",
+      "latency": 1146
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@50.114.28.183:5668",
+      "latency": 1476
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@64.137.77.150:5585",
+      "latency": 1515
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.113.231.254:7339",
+      "latency": 2391
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.39.73.196:5611",
+      "latency": 1483
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.41.176.76:6374",
+      "latency": 1349
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.112.136.112:6056",
+      "latency": 1432
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.112.171.22:5990",
+      "latency": 9191
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.85.129.138:6616",
+      "latency": 1835
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@89.249.192.248:6647",
+      "latency": 1265
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.112.143.214:6657",
+      "latency": 1420
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@185.171.254.253:6285",
+      "latency": 5256
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@192.186.151.156:8657",
+      "latency": 1230
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.21.248.119:6455",
+      "latency": 1303
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.26.208.86:5393",
+      "latency": 1680
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@188.213.1.185:7091",
+      "latency": 2164
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.23.229.219:7576",
+      "latency": 1488
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@212.135.180.2:6684",
+      "latency": 1854
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@108.165.161.254:5995",
+      "latency": 2020
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.131.101.27:6294",
+      "latency": 1591
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.25.242.213:7532",
+      "latency": 1356
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.29.236.214:8027",
+      "latency": 1171
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@91.223.126.146:6758",
+      "latency": 1412
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.233.20.148:6164",
+      "latency": 1653
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.238.8.191:6049",
+      "latency": 1140
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@145.223.41.43:6314",
+      "latency": 1458
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.24.217.227:5557",
+      "latency": 1075
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.27.216.24:5355",
+      "latency": 1169
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@92.113.1.226:5926",
+      "latency": 1273
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@108.165.197.115:6354",
+      "latency": 1766
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.252.152.95:7008",
+      "latency": 1595
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.43.65.88:6602",
+      "latency": 1086
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@46.203.134.231:5855",
+      "latency": 1515
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@142.147.244.88:6332",
+      "latency": 1561
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@206.83.131.151:5527",
+      "latency": 1242
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@38.154.217.129:7320",
+      "latency": 1116
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.127.248.198:5199",
+      "latency": 1887
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.25.247.154:6488",
+      "latency": 1572
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@103.47.53.183:8481",
+      "latency": 1248
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@91.124.253.171:6531",
+      "latency": 1451
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@50.114.14.5:6490",
+      "latency": 1449
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.249.55.251:6619",
+      "latency": 952
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@140.99.189.91:7969",
+      "latency": 1732
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.67.2.173:5747",
+      "latency": 1445
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@64.137.121.82:6337",
+      "latency": 1990
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@91.124.253.150:6510",
+      "latency": 1245
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.253.180.158:6571",
+      "latency": 1522
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@154.6.23.145:6612",
+      "latency": 1434
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@184.174.58.20:5582",
+      "latency": 1469
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@199.180.10.109:6480",
+      "latency": 1204
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@23.26.231.113:7354",
+      "latency": 1752
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@192.177.87.17:5863",
+      "latency": 1277
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.41.173.14:6381",
+      "latency": 1374
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.150.176.231:6104",
+      "latency": 1440
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.26.242.81:6900",
+      "latency": 1486
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@103.99.33.216:6211",
+      "latency": 1577
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.245.244.174:6614",
+      "latency": 1362
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@161.123.5.76:5125",
+      "latency": 1335
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@185.101.253.75:5635",
+      "latency": 1078
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.26.208.213:5520",
+      "latency": 1473
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@31.223.189.190:6456",
+      "latency": 1708
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.24.217.2:5332",
+      "latency": 1303
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.29.245.237:7061",
+      "latency": 2056
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@142.111.104.218:6228",
+      "latency": 1258
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@142.111.161.184:6555",
+      "latency": 1303
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@148.135.179.41:6100",
+      "latency": 1109
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.43.82.163:6157",
+      "latency": 1080
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@64.64.127.2:5955",
+      "latency": 1455
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@154.6.115.171:6640",
+      "latency": 1449
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@45.150.178.138:6010",
+      "latency": 1291
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@50.114.242.95:6332",
+      "latency": 2279
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.25.242.96:7415",
+      "latency": 1389
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@82.25.247.44:6378",
+      "latency": 1571
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@142.111.126.212:6939",
+      "latency": 1330
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@185.101.254.232:5779",
+      "latency": 1112
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@89.249.195.148:6903",
+      "latency": 1653
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@104.165.79.170:7330",
+      "latency": 1214
+    },
+    {
+      "success": true,
+      "proxy": "http://lrkksoef:47592sgxxc1k@107.173.128.112:7566",
+      "latency": 1597
+    }
+  ]
+}
