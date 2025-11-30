@@ -491,17 +491,24 @@ class BotClient {
         // [关键] 主号不允许切换代理，因为和 Steam 验证绑定
         if (this.role === 'LEADER') {
             this.log('⚠️ 主号不允许切换代理（IP 与验证绑定），使用原代理重试...');
-            // 主号只能用原代理重试
+            
+            // [新增] 先尝试断开连接，防止 Already logged on 错误
+            try {
+                this.client.logOff();
+            } catch (e) {}
+
+            // 主号无限重试，直到成功
             this.retryCount = (this.retryCount || 0) + 1;
-            if (this.retryCount < 5) {
-                setTimeout(() => {
-                    this.log(`🔄 主号第 ${this.retryCount} 次重试登录...`);
-                    this.start();
-                }, 5000 * this.retryCount); // 递增延迟：5s, 10s, 15s, 20s
-            } else {
-                this.error('❌ 主号重试次数已达上限，请检查代理或网络');
-                this.state = 'ABANDONED';
-            }
+            
+            // 计算延迟时间，最大不超过 30 秒
+            const delay = Math.min(this.retryCount * 5000, 60000);
+            
+            this.log(`🔄 主号第 ${this.retryCount} 次重试登录... (等待 ${delay/1000} 秒)`);
+            
+            setTimeout(() => {
+                this.start();
+            }, delay);
+            
             return;
         }
         
@@ -651,6 +658,19 @@ class BotClient {
             this.proxyFailCount++;
             this.log(`⚠️ 网络/代理连接不稳定 (${this.proxyFailCount}/${this.maxProxyRetries})`);
             
+            // 如果是主号，强制无限重试
+            if (this.role === 'LEADER') {
+                this.retryCount = (this.retryCount || 0) + 1;
+                const delay = Math.min(this.retryCount * 5000, 30000);
+                
+                setTimeout(() => {
+                    try { this.client.logOff(); } catch (e) {} 
+                    this.log(`🔄 主号网络波动，第 ${this.retryCount} 次重试登录... (等待 ${delay/1000} 秒)`);
+                    this.start();
+                }, delay);
+                return;
+            }
+
             // 立即切换到下一个代理
             if (proxies.length > 1) {
                 this.switchProxyAndRetry();
@@ -659,6 +679,7 @@ class BotClient {
                 this.retryCount = (this.retryCount || 0) + 1;
                 if (this.retryCount < 3) {
                     setTimeout(() => {
+                        try { this.client.logOff(); } catch (e) {} // [新增] 重试前断开
                         this.log(`🔄 第 ${this.retryCount} 次重试登录...`);
                         this.start();
                     }, 5000);
@@ -670,6 +691,7 @@ class BotClient {
                 this.retryCount = (this.retryCount || 0) + 1;
                 if (this.retryCount < 3) {
                     setTimeout(() => {
+                        try { this.client.logOff(); } catch (e) {} // [新增] 重试前断开
                         this.log(`🔄 第 ${this.retryCount} 次重试登录...`);
                         this.start();
                     }, 5000);
@@ -686,6 +708,15 @@ class BotClient {
             return;
         }
         
+        // [新增] 防止重复登录错误
+        if (this.client.steamID) {
+             // 只有在确实需要重连时才 logOff，但 start() 本意就是发起新的连接
+             // 所以这里为了安全，如果已连接则先断开
+             try { 
+                this.client.logOff(); 
+             } catch (e) {}
+        }
+
         this.state = 'LOGGING_IN';
         
         // [新增] 登录超时保护 - 90秒无响应则自动放弃或重试
