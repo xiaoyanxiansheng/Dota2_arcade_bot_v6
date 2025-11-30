@@ -2,6 +2,7 @@ const { SocksProxyAgent } = require('socks-proxy-agent');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const https = require('https');
 const fs = require('fs');
+const path = require('path');
 
 /**
  * 代理测试工具
@@ -12,9 +13,11 @@ const TIMEOUT = 10000; // 10秒超时
 const TEST_URL = 'https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/';
 
 // 读取代理列表
+const projectRoot = path.join(__dirname, '..');
 function loadProxies() {
     try {
-        const content = fs.readFileSync('./proxies.txt', 'utf8');
+        const proxiesPath = path.join(projectRoot, 'data', 'proxies.txt');
+        const content = fs.readFileSync(proxiesPath, 'utf8');
         return content.split('\n')
             .map(line => line.trim())
             .filter(line => line.length > 0);
@@ -80,7 +83,7 @@ function maskProxy(proxyUrl) {
 }
 
 // 批量测试代理（并发）
-async function testProxiesConcurrent(proxies, concurrency = 10) {
+async function testProxiesConcurrent(proxies, concurrency = 100) {
     const results = [];
     const total = proxies.length;
     
@@ -110,7 +113,7 @@ function saveResults(results) {
     const invalidProxies = results.filter(r => !r.success);
     
     // 保存可用的代理
-    fs.writeFileSync('./proxies_valid.txt', validProxies.join('\n'), 'utf8');
+    fs.writeFileSync(path.join(projectRoot, 'data', 'proxies_valid.txt'), validProxies.join('\n'), 'utf8');
     
     // 保存详细报告
     const report = {
@@ -122,7 +125,7 @@ function saveResults(results) {
         details: results
     };
     
-    fs.writeFileSync('./proxy_test_report.json', JSON.stringify(report, null, 2), 'utf8');
+    // fs.writeFileSync(path.join(projectRoot, 'proxy_test_report.json'), JSON.stringify(report, null, 2), 'utf8');
     
     console.log(`\n${'='.repeat(60)}`);
     console.log(`📊 测试完成！`);
@@ -130,8 +133,8 @@ function saveResults(results) {
     console.log(`总计: ${results.length} 个代理`);
     console.log(`✅ 可用: ${validProxies.length} 个 (${report.validRate})`);
     console.log(`❌ 失效: ${invalidProxies.length} 个`);
-    console.log(`\n💾 可用代理已保存至: proxies_valid.txt`);
-    console.log(`📄 详细报告已保存至: proxy_test_report.json`);
+    console.log(`\n💾 可用代理已保存至: data/proxies_valid.txt`);
+    // console.log(`📄 详细报告已保存至: proxy_test_report.json`);
     
     if (validProxies.length > 0) {
         const avgLatency = results
@@ -140,7 +143,7 @@ function saveResults(results) {
         console.log(`⚡ 平均延迟: ${avgLatency.toFixed(0)}ms`);
     }
     
-    console.log(`\n💡 提示: 将 proxies_valid.txt 重命名为 proxies.txt 以使用可用代理`);
+    console.log(`\n💡 提示: 将 data/proxies_valid.txt 重命名为 data/proxies.txt 以使用可用代理`);
 }
 
 // 主函数
@@ -154,7 +157,7 @@ async function main() {
     
     console.log(`📋 读取到 ${proxies.length} 个代理`);
     
-    const results = await testProxiesConcurrent(proxies, 10);
+    const results = await testProxiesConcurrent(proxies, 100);
     
     saveResults(results);
 }

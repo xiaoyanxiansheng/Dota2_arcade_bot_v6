@@ -3,6 +3,7 @@ const SteamTotp = require('steam-totp');
 const protobuf = require('protobufjs');
 const Long = require('protobufjs').util.Long;
 const fs = require('fs');
+const path = require('path');
 
 /**
  * 清理脚本 - 极速模式
@@ -20,12 +21,15 @@ const fs = require('fs');
 const k_EMsgGCAbandonCurrentGame = 7035;
 const k_EMsgGCPracticeLobbyLeave = 7040;
 const k_EMsgGCClientHello = 4006;
+const k_EMsgGCClientConnectionStatus = 4004; // [新增] GC 连接状态确认
 const k_EMsgProtoMask = 0x80000000;
 
 // 加载配置
+const projectRoot = path.join(__dirname, '..');
 let config;
 try {
-    const rawContent = fs.readFileSync('./config.json', 'utf8').replace(/^\uFEFF/, '');
+    const configPath = path.join(projectRoot, 'config', 'config.json');
+    const rawContent = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
     config = JSON.parse(rawContent);
 } catch (e) {
     console.error("❌ 无法读取 config.json: " + e.message);
@@ -35,8 +39,9 @@ try {
 // 加载代理列表
 let proxies = [];
 try {
-    if (fs.existsSync('./proxies.txt')) {
-        const content = fs.readFileSync('./proxies.txt', 'utf8');
+    const proxiesPath = path.join(projectRoot, 'data', 'proxies.txt');
+    if (fs.existsSync(proxiesPath)) {
+        const content = fs.readFileSync(proxiesPath, 'utf8');
         proxies = content.split('\n')
             .map(line => line.trim())
             .filter(line => line.length > 0);
@@ -52,24 +57,24 @@ try {
     const root = new protobuf.Root();
     root.resolvePath = function(origin, target) {
         if (fs.existsSync(target)) return target;
-        const pathInProtobufs = "Protobufs/" + target;
+        const pathInProtobufs = path.join(projectRoot, "Protobufs", target);
         if (fs.existsSync(pathInProtobufs)) return pathInProtobufs;
-        const pathInDota2 = "Protobufs/dota2/" + target;
+        const pathInDota2 = path.join(projectRoot, "Protobufs", "dota2", target);
         if (fs.existsSync(pathInDota2)) return pathInDota2;
         return target;
     };
 
-    root.loadSync("Protobufs/google/protobuf/descriptor.proto");
-    root.loadSync("Protobufs/dota2/networkbasetypes.proto"); 
-    root.loadSync("Protobufs/dota2/network_connection.proto");
-    root.loadSync("Protobufs/dota2/steammessages.proto");
-    root.loadSync("Protobufs/dota2/gcsdk_gcmessages.proto");
-    root.loadSync("Protobufs/dota2/dota_shared_enums.proto");
-    root.loadSync("Protobufs/dota2/dota_client_enums.proto");
-    root.loadSync("Protobufs/dota2/base_gcmessages.proto");
-    root.loadSync("Protobufs/dota2/dota_gcmessages_common_lobby.proto");
-    root.loadSync("Protobufs/dota2/dota_gcmessages_client_match_management.proto");
-    root.loadSync("Protobufs/dota2/dota_gcmessages_client.proto");
+    root.loadSync(path.join(projectRoot, "Protobufs/google/protobuf/descriptor.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/networkbasetypes.proto")); 
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/network_connection.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/steammessages.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/gcsdk_gcmessages.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_shared_enums.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_client_enums.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/base_gcmessages.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_gcmessages_common_lobby.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_gcmessages_client_match_management.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_gcmessages_client.proto"));
 
     CMsgClientHello = root.lookupType("CMsgClientHello");
     
@@ -121,7 +126,7 @@ console.log(`📋 找到 ${allAccounts.length} 个小号 (已跳过 ${skippedLea
 if (proxies.length > 0) {
     console.log(`🛡️ 使用 ${proxies.length} 个代理 (每 ${accountsPerProxy} 个账号使用 1 个代理)`);
 }
-console.log(`⚡ 并发数: 100\n`);
+console.log(`⚡ 并发数: 1000\n`);
 
 let completedCount = 0;
 let successCount = 0;
@@ -136,7 +141,7 @@ function clearAccount(accountData, index, total) {
         const proxy = accountData.proxy;
         
         const steamOptions = {
-            dataDirectory: "./steam_data"
+            dataDirectory: path.join(projectRoot, "steam_data")
         };
         
         if (proxy) {
@@ -147,6 +152,7 @@ function clearAccount(accountData, index, total) {
         
         let commandsSent = false;
         let isCompleted = false; // [修复] 防止重复统计
+        let isGcConnected = false; // [新增] GC 连接状态
         let timeout;
         
         // 统一结束处理函数
@@ -174,13 +180,13 @@ function clearAccount(accountData, index, total) {
             resolve();
         };
         
-        // 超时保护（15秒）
+        // 超时保护（20秒，增加到20秒以应对高延迟）
         timeout = setTimeout(() => {
             if (!isCompleted) {
                 console.log(`⏱️  [${index}/${total}] ${account.username} - 超时`);
                 finish(false);
             }
-        }, 15000);
+        }, 20000);
         
         // 错误处理
         client.on('error', (err) => {
@@ -195,23 +201,19 @@ function clearAccount(accountData, index, total) {
             client.gamesPlayed([config.global_settings.target_app_id]);
         });
         
-        // Dota 2 启动
-        client.on('appLaunched', (appid) => {
-            if (isCompleted) return;
+        // [新增] 监听 GC 消息
+        client.on('receivedFromGC', (appid, msgType, payload) => {
+            if (isCompleted || appid !== config.global_settings.target_app_id) return;
             
-            if (appid === config.global_settings.target_app_id && !commandsSent) {
-                // 立即发送退出命令
-                try {
-                    // 发送 Hello
-                    const payload = { client_session_id: 0, engine: 2, client_launcher: 0 };
-                    const message = CMsgClientHello.create(payload);
-                    const buffer = CMsgClientHello.encode(message).finish();
-                    client.sendToGC(config.global_settings.target_app_id, k_EMsgGCClientHello | k_EMsgProtoMask, {}, buffer);
+            const cleanMsgType = msgType & ~k_EMsgProtoMask;
+            
+            // 监听 GC 连接状态
+            if (cleanMsgType === k_EMsgGCClientConnectionStatus) {
+                if (!isGcConnected) {
+                    isGcConnected = true;
                     
-                    // 连续发送退出命令
-                    setTimeout(() => {
-                        if (isCompleted) return;
-                        
+                    // GC 连接成功后，发送退出命令
+                    if (!commandsSent) {
                         try {
                             client.sendToGC(config.global_settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
                             client.sendToGC(config.global_settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
@@ -219,11 +221,40 @@ function clearAccount(accountData, index, total) {
                             commandsSent = true;
                             console.log(`✅ [${index}/${total}] ${account.username}`);
                             
-                            // 成功结束
-                            finish(true);
+                            // 等待 500ms 让命令发送出去，然后结束
+                            setTimeout(() => {
+                                finish(true);
+                            }, 500);
                             
                         } catch (err) {}
-                    }, 1000); // 1秒后发送退出命令
+                    }
+                }
+            }
+        });
+        
+        // Dota 2 启动
+        client.on('appLaunched', (appid) => {
+            if (isCompleted) return;
+            
+            if (appid === config.global_settings.target_app_id) {
+                // 发送 Hello 并启动心跳
+                try {
+                    const payload = { client_session_id: 0, engine: 2, client_launcher: 0 };
+                    const message = CMsgClientHello.create(payload);
+                    const buffer = CMsgClientHello.encode(message).finish();
+                    client.sendToGC(config.global_settings.target_app_id, k_EMsgGCClientHello | k_EMsgProtoMask, {}, buffer);
+                    
+                    // 每 5 秒发送一次 Hello（心跳），直到 GC 连接成功
+                    const helloInterval = setInterval(() => {
+                        if (isCompleted || isGcConnected) {
+                            clearInterval(helloInterval);
+                            return;
+                        }
+                        try {
+                            client.sendToGC(config.global_settings.target_app_id, k_EMsgGCClientHello | k_EMsgProtoMask, {}, buffer);
+                        } catch (e) {}
+                    }, 5000);
+                    
                 } catch (err) {}
             }
         });
@@ -253,7 +284,7 @@ function clearAccount(accountData, index, total) {
 
 // 批量清理（极速并发）
 async function clearAllAccounts() {
-    const batchSize = 100; // 每批 100 个（极速模式）
+    const batchSize = 1000; // 每批 1000 个（超级极速模式）
     const startTime = Date.now();
     
     for (let i = 0; i < allAccounts.length; i += batchSize) {
@@ -313,8 +344,8 @@ async function clearAllAccounts() {
             };
         });
         
-        // 重试（每批 50 个）
-        const retryBatchSize = 50;
+        // 重试（每批 500 个）
+        const retryBatchSize = 500;
         for (let i = 0; i < retryAccounts.length; i += retryBatchSize) {
             const batch = retryAccounts.slice(i, i + retryBatchSize);
             

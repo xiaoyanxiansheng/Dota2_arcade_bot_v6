@@ -1,14 +1,19 @@
 const SteamUser = require('steam-user');
 const SteamTotp = require('steam-totp');
 const fs = require('fs');
+const path = require('path');
 
 console.log("--- Leader 登录验证工具 ---\n");
+
+// 项目根目录
+const projectRoot = path.join(__dirname, '..');
 
 // [新增] 读取代理列表
 let proxies = [];
 try {
-    if (fs.existsSync('./proxies.txt')) {
-        const content = fs.readFileSync('./proxies.txt', 'utf8');
+    const proxiesPath = path.join(projectRoot, 'data', 'proxies.txt');
+    if (fs.existsSync(proxiesPath)) {
+        const content = fs.readFileSync(proxiesPath, 'utf8');
         proxies = content.split('\n')
             .map(line => line.trim())
             .filter(line => line.length > 0);
@@ -23,7 +28,8 @@ try {
 // 读取配置
 let config;
 try {
-    const rawContent = fs.readFileSync('./config.json', 'utf8').replace(/^\uFEFF/, '');
+    const configPath = path.join(projectRoot, 'config', 'config.json');
+    const rawContent = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
     config = JSON.parse(rawContent);
 } catch (e) {
     console.error("❌ 读取配置失败: " + e.message);
@@ -76,7 +82,7 @@ console.log(`\n🎯 正在登录主号 [${leaderIndex + 1}]: ${leader.username}\
 // [修改] 显式指定数据目录，确保凭证保存在本地
 // [关键修改] 主号使用固定代理：主号1用代理1，主号2用代理2，依此类推
 const steamOptions = {
-    dataDirectory: "./steam_data"
+    dataDirectory: path.join(projectRoot, "steam_data")
 };
 
 if (proxies.length > 0) {

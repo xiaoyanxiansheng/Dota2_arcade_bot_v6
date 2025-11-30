@@ -1,77 +1,58 @@
-# Dota 2 挂机机器人
+# Dota 2 Arcade Bot v6.0
 
-## 🚀 如何运行
+自动化 Dota 2 自定义游戏房间创建和管理工具
+
+## 📋 使用步骤
 
 ### 1. 安装依赖
 ```bash
 npm install
 ```
 
-### 2. 配置账号 (config.json)
-
-```json
-{
-  "global_settings": {
-    "seeding_mode": true,
-    "max_players_per_room": 4,
-    "debug_mode": false
-  },
-  "fleets": [
-    {
-      "id": "fleet_1",
-      "leader": {
-        "username": "大号",
-        "password": "密码",
-        "shared_secret": ""
-      },
-      "followers": [
-        { "username": "小号1", "password": "密码", "shared_secret": "" },
-        { "username": "小号2", "password": "密码", "shared_secret": "" }
-      ]
-    }
-  ]
-}
-```
-
-### 3. 启动
-
+### 2. 配置文件
+（已经存在近1000小号）
 ```bash
-# 第一次运行先登录大号（只用运行一次，凭证会保存在steam_data中）
-node login_leader.js 1
-
-# 启动脚本
-node index.js
+编辑 `config/config.json`，填入账号信息和游戏设置
 ```
 
-## ✅ 当前功能
+### 3. 准备代理（可选）
+（已经存在近700个代理）
+```bash
+在 `data/proxies.txt` 中添加代理列表，格式：`ip:port:user:pass`
+```
 
-- 1个大号持续创建房间，小号检测到后立即加入
-- 小号按编号从小到大填满各个房间
-- 大号检测到小号加入后自动离开创建下一个房间
-- 支持多账号批量运行
-- Steam Guard 验证 + 自动保存凭证
+### 4. 运行工具
 
-## 🔧 待完善
+#### 测试代理
+（可以定期运行看看哪些代理已经失效）
+```bash
+0-test_proxies.bat
+```
 
-### 1. 密码房
-- 现在无法创建密码房，容易被真实玩家加入导致游戏开始，小号失联
-- 需要能创建密码房/或者不公开房间
-- 房间名 #1 #2 #3 标记太明显，需要隐藏或改名
+#### 登录主号验证（必须首次验证）
+（运行后填入验证码，后续短时间内不需要再次填入）
+```bash
+0-login_leader.bat
+# 或命令行：0-login_leader.bat 1
+```
 
-### 2. 多实例管理
-- 手动启动多个脚本会冲突
-- 需要实例间通信机制（文件锁或 Redis）
+#### 清理所有账号
+（防止异常情况，账号还在线，或者在房间里，又再次登录进房间导致异常）
+```bash
+0-clear_all.bat
+```
 
-### 3. 掉线补救
-- 掉线后自动重连
-- 重连后进入未满房间
+#### 启动机器人
+```bash
+1-1-start.bat          # 正常模式
+1-2-start_debug.bat    # 调试模式
+```
 
-## 📝 消息ID
+## 📁 重要文件
 
-- 7044 - 加入房间
-- 7047 - 设置队伍位置
-- 7070 - 标记准备/接受匹配
-- 7170 - 房主发起匹配通知
-- 7113 - 加入房间响应
-- 7469 - 可加入房间列表
-- 7004 - Lobby快照
+| 文件 | 说明 |
+|------|------|
+| `config/config.json` | 主配置文件 |
+| `data/proxies.txt` | 代理列表 |
+| `data/proxies_valid.txt` | 可用代理（自动生成） |
+| `steam_data/` | Steam 登录凭证（自动生成） |

@@ -3,12 +3,15 @@ const SteamTotp = require('steam-totp');
 const protobuf = require('protobufjs');
 const Long = require('protobufjs').util.Long;
 const fs = require('fs');
+const path = require('path');
 
 // [新增] 读取代理列表
+const projectRoot = path.join(__dirname, '..');
 let proxies = [];
 try {
-    if (fs.existsSync('./proxies.txt')) {
-        const content = fs.readFileSync('./proxies.txt', 'utf8');
+    const proxiesPath = path.join(projectRoot, 'data', 'proxies.txt');
+    if (fs.existsSync(proxiesPath)) {
+        const content = fs.readFileSync(proxiesPath, 'utf8');
         proxies = content.split('\n')
             .map(line => line.trim())
             .filter(line => line.length > 0);
@@ -94,24 +97,24 @@ try {
     const root = new protobuf.Root();
     root.resolvePath = function(origin, target) {
         if (fs.existsSync(target)) return target;
-        const pathInProtobufs = "Protobufs/" + target;
+        const pathInProtobufs = path.join(projectRoot, "Protobufs", target);
         if (fs.existsSync(pathInProtobufs)) return pathInProtobufs;
-        const pathInDota2 = "Protobufs/dota2/" + target;
+        const pathInDota2 = path.join(projectRoot, "Protobufs", "dota2", target);
         if (fs.existsSync(pathInDota2)) return pathInDota2;
         return target;
     };
 
-    root.loadSync("Protobufs/google/protobuf/descriptor.proto");
-    root.loadSync("Protobufs/dota2/networkbasetypes.proto"); 
-    root.loadSync("Protobufs/dota2/network_connection.proto");
-    root.loadSync("Protobufs/dota2/steammessages.proto");
-    root.loadSync("Protobufs/dota2/gcsdk_gcmessages.proto");
-    root.loadSync("Protobufs/dota2/dota_shared_enums.proto");
-    root.loadSync("Protobufs/dota2/dota_client_enums.proto");
-    root.loadSync("Protobufs/dota2/base_gcmessages.proto");
-    root.loadSync("Protobufs/dota2/dota_gcmessages_common_lobby.proto");
-    root.loadSync("Protobufs/dota2/dota_gcmessages_client_match_management.proto");
-    root.loadSync("Protobufs/dota2/dota_gcmessages_client.proto");
+    root.loadSync(path.join(projectRoot, "Protobufs/google/protobuf/descriptor.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/networkbasetypes.proto")); 
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/network_connection.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/steammessages.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/gcsdk_gcmessages.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_shared_enums.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_client_enums.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/base_gcmessages.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_gcmessages_common_lobby.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_gcmessages_client_match_management.proto"));
+    root.loadSync(path.join(projectRoot, "Protobufs/dota2/dota_gcmessages_client.proto"));
 
     CMsgClientHello = root.lookupType("CMsgClientHello");
     CMsgPracticeLobbyJoin = root.lookupType("CMsgPracticeLobbyJoin");
@@ -386,7 +389,7 @@ class FleetManager {
                 const bot = new BotClient(acc, this.settings, 'FOLLOWER', this.id, this, followerProxy, followerProxyIndex % proxies.length);
                 this.bots.push(bot);
                 bot.start();
-            }, 5000 + (idx * 3000)); // Leader 先跑5秒，然后每个Follower间隔3秒
+            }, idx * 10); // 批量快速启动，10ms间隔
         });
         
         // 3. [已移除] 进度监控现在由全局统一管理，不再在车队级别启动
@@ -433,7 +436,7 @@ class BotClient {
 
         // [修改] 显式指定数据目录，并应用代理配置
         const steamOptions = {
-            dataDirectory: "./steam_data"
+            dataDirectory: path.join(projectRoot, "steam_data")
         };
         
         if (this.proxy) {
@@ -512,7 +515,7 @@ class BotClient {
             
             // 创建新客户端
             const steamOptions = {
-                dataDirectory: "./steam_data",
+                dataDirectory: path.join(projectRoot, "steam_data"),
                 httpProxy: newProxy
             };
             
@@ -799,7 +802,8 @@ class BotClient {
                     this.createLobby();
                 }
             } else {
-                this.startPolling();
+                // [新逻辑] Follower 进入待命池，等待主号分配
+                this.enterIdlePool();
             }
         }, 1500);
     }
@@ -833,6 +837,17 @@ class BotClient {
             }
         }
         this.requestLobbyList();
+    }
+
+    // [新增] Follower 进入待命池
+    enterIdlePool() {
+        if (this.role !== 'FOLLOWER') return;
+        
+        this.state = 'IDLE';
+        if (this.settings.debug_mode) {
+            this.log('进入待命池，等待主号分配房间');
+        }
+        // 不再主动轮询，被动等待 joinLobbyDirectly() 调用
     }
 
     requestLobbyList() {
@@ -889,11 +904,42 @@ class BotClient {
         }
     }
 
+    // [新增] 主号从待命池中分配小号
+    assignFollowersFromPool() {
+        if (this.role !== 'LEADER') return;
+        if (!this.currentLobbyId) return;
+        
+        // 获取每个房间的小号数量配置
+        const maxPerRoom = this.settings.bots_per_room || this.settings.debug_max_bots_per_room || 22;
+        
+        // 从 manager 中获取所有处于 IDLE 状态的小号
+        const idleBots = this.manager.bots.filter(bot => 
+            bot.role === 'FOLLOWER' && bot.state === 'IDLE'
+        );
+        
+        // 取前 maxPerRoom 个小号
+        const botsToAssign = idleBots.slice(0, maxPerRoom);
+        
+        if (this.settings.debug_mode) {
+            this.log(`从待命池分配 ${botsToAssign.length}/${idleBots.length} 个小号到房间 (LobbyID: ${this.currentLobbyId.toString()})`);
+        }
+        
+        // 逐个通知小号加入
+        botsToAssign.forEach((bot, idx) => {
+            setTimeout(() => {
+                bot.joinLobbyDirectly(this.currentLobbyId);
+            }, idx * 50); // 每个小号间隔50ms加入，避免瞬时峰值
+        });
+    }
+
         // [播种模式] 创建房间并等待小号加入
     createLobbyAndSeed() {
         this.roomsCreated++;
         this.currentRoomNumber = this.roomsCreated;
         const roomName = `Bot Room ${this.fleetId} #${this.roomsCreated}`;
+        
+        // [新增] 重置分配标志，允许新房间分配小号
+        this.hasAssignedFollowers = false;
         
         try {
             const gameIdLong = Long.fromString(this.settings.custom_game_id, true);
@@ -1288,6 +1334,12 @@ class BotClient {
                             this.manager.setConfirmedLobby(lobbyId, gameName, this.currentRoomNumber, memberCount);
                         }
                         
+                        // [新增] 如果是首次确认房间（人数为1，即只有主号），立即从池子分配小号
+                        if (memberCount === 1 && !this.hasAssignedFollowers) {
+                            this.hasAssignedFollowers = true;
+                            this.assignFollowersFromPool();
+                        }
+                        
                         if (memberCount > 1) {
                             if (this.manager) {
                                 this.manager.clearConfirmedLobby();
@@ -1377,7 +1429,8 @@ const isDebugMode = args.includes('debug');
 
 let config;
              try {
-    const rawContent = fs.readFileSync('./config.json', 'utf8').replace(/^\uFEFF/, '');
+    const configPath = path.join(projectRoot, 'config', 'config.json');
+    const rawContent = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
     config = JSON.parse(rawContent);
              } catch (e) {
     console.error("❌ 读取配置失败: " + e.message);

@@ -8,7 +8,7 @@
     "seeding_mode": true,
     "debug_mode": true,
     "debug_max_bots_per_room": 23,
-    "accounts_per_proxy": 6
+    "accounts_per_proxy": 5
   },
   "fleets": [
     {
