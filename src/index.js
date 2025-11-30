@@ -488,12 +488,29 @@ class BotClient {
     
     // [新增] 切换到下一个代理并重新登录
     switchProxyAndRetry() {
+        // [关键] 主号不允许切换代理，因为和 Steam 验证绑定
+        if (this.role === 'LEADER') {
+            this.log('⚠️ 主号不允许切换代理（IP 与验证绑定），使用原代理重试...');
+            // 主号只能用原代理重试
+            this.retryCount = (this.retryCount || 0) + 1;
+            if (this.retryCount < 5) {
+                setTimeout(() => {
+                    this.log(`🔄 主号第 ${this.retryCount} 次重试登录...`);
+                    this.start();
+                }, 5000 * this.retryCount); // 递增延迟：5s, 10s, 15s, 20s
+            } else {
+                this.error('❌ 主号重试次数已达上限，请检查代理或网络');
+                this.state = 'ABANDONED';
+            }
+            return;
+        }
+        
         if (proxies.length === 0) {
             this.error('❌ 没有可用代理，无法切换');
             return;
         }
         
-        // 切换到下一个代理
+        // 切换到下一个代理（仅限小号）
         this.currentProxyIndex = (this.currentProxyIndex + 1) % proxies.length;
         const newProxy = proxies[this.currentProxyIndex];
         
