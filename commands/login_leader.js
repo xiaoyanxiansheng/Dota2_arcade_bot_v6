@@ -79,10 +79,22 @@ const leader = leaders[leaderIndex];
 
 console.log(`\n🎯 正在登录主号 [${leaderIndex + 1}]: ${leader.username}\n`);
 
-// [修改] 显式指定数据目录，确保凭证保存在本地
+// [关键修改] 使用共享验证数据目录（项目外部），支持多项目共享
+// 共享目录路径从配置文件读取，默认为项目父目录下的 shared_steam_data
+const sharedDataPath = config.global_settings.shared_steam_data_path || "../shared_steam_data";
+const steamDataDir = path.resolve(projectRoot, sharedDataPath);
+
+// 确保共享目录存在
+if (!fs.existsSync(steamDataDir)) {
+    fs.mkdirSync(steamDataDir, { recursive: true });
+    console.log(`📁 创建共享验证数据目录: ${steamDataDir}\n`);
+} else {
+    console.log(`📁 使用共享验证数据目录: ${steamDataDir}\n`);
+}
+
 // [关键修改] 主号使用固定代理：主号1用代理1，主号2用代理2，依此类推
 const steamOptions = {
-    dataDirectory: path.join(projectRoot, "steam_data")
+    dataDirectory: steamDataDir
 };
 
 if (proxies.length > 0) {
@@ -113,11 +125,13 @@ client.logOn(logOnOptions);
 
 client.on('loggedOn', () => {
     console.log(`\n✅✅✅ 登录成功！`);
-    console.log(`[${leader.username}] 登录凭证 (Sentry File) 已自动保存到 ./steam_data 目录。`);
+    console.log(`[${leader.username}] 登录凭证已自动保存到共享目录:`);
+    console.log(`   ${steamDataDir}`);
     console.log(`\n💡 提示: 如果您有多个车队，请继续运行：`);
     console.log(`   node login_leader.js 2   (登录第二个车队)`);
     console.log(`   node login_leader.js 3   (登录第三个车队)`);
-    console.log(`\n➡️ 所有 Leader 都登录完成后，运行 'node index.js' 启动批量脚本。\n`);
+    console.log(`\n➡️ 所有 Leader 都登录完成后，运行 'node index.js' 启动批量脚本。`);
+    console.log(`\n🔄 共享目录说明: 所有使用相同 IP 和此目录的项目将共享验证信息。\n`);
     
     // 稍微等待一下以确保文件写入
     setTimeout(() => process.exit(0), 2000);

@@ -434,9 +434,12 @@ class BotClient {
         this.initialProxyIndex = proxyIndex; // [新增] 记录初始代理索引
         this.currentProxyIndex = proxyIndex; // [新增] 当前使用的代理索引
 
-        // [修改] 显式指定数据目录，并应用代理配置
+        // [关键修改] 使用共享验证数据目录（项目外部），支持多项目共享
+        const sharedDataPath = settings.shared_steam_data_path || "../shared_steam_data";
+        const steamDataDir = path.resolve(projectRoot, sharedDataPath);
+        
         const steamOptions = {
-            dataDirectory: path.join(projectRoot, "steam_data")
+            dataDirectory: steamDataDir
         };
         
         if (this.proxy) {
@@ -537,9 +540,12 @@ class BotClient {
                 } catch (e) {}
             }
             
-            // 创建新客户端
+            // 创建新客户端（使用共享验证数据目录）
+            const sharedDataPath = this.settings.shared_steam_data_path || "../shared_steam_data";
+            const steamDataDir = path.resolve(projectRoot, sharedDataPath);
+            
             const steamOptions = {
-                dataDirectory: path.join(projectRoot, "steam_data"),
+                dataDirectory: steamDataDir,
                 httpProxy: newProxy
             };
             
@@ -1490,6 +1496,21 @@ const globalSettings = config.global_settings;
 
 // [新增] 强制覆盖 debug_mode 配置，使用命令行参数
 globalSettings.debug_mode = isDebugMode;
+
+// [新增] 确保共享验证数据目录存在
+const sharedDataPath = globalSettings.shared_steam_data_path || "../shared_steam_data";
+const steamDataDir = path.resolve(projectRoot, sharedDataPath);
+
+if (!fs.existsSync(steamDataDir)) {
+    fs.mkdirSync(steamDataDir, { recursive: true });
+    if (isDebugMode) {
+        console.log(`[System] 📁 创建共享验证数据目录: ${steamDataDir}`);
+    }
+} else {
+    if (isDebugMode) {
+        console.log(`[System] 📁 使用共享验证数据目录: ${steamDataDir}`);
+    }
+}
 
 // [新增] 自动分配车队逻辑
 // 检查是否使用新格式（leader 和 followers 是数组）

@@ -15,6 +15,13 @@ npm install
 编辑 `config/config.json`，填入账号信息和游戏设置
 ```
 
+**多项目共享验证（可选）**
+在 `config.json` 的 `global_settings` 中添加：
+```json
+"shared_steam_data_path": "../shared_steam_data"
+```
+多个项目使用相同 IP 时，只需验证一次主号
+
 ### 3. 准备代理（可选）
 （已经存在近700个代理）
 ```bash
@@ -55,4 +62,4 @@ npm install
 | `config/config.json` | 主配置文件 |
 | `data/proxies.txt` | 代理列表 |
 | `data/proxies_valid.txt` | 可用代理（自动生成） |
-| `steam_data/` | Steam 登录凭证（自动生成） |
+| `steam_data/` | Steam 登录凭证（自动生成，默认使用共享目录） |

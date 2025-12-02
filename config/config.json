@@ -3,12 +3,13 @@
     "target_app_id": 570,
     "custom_game_id": "3588570271",
     "server_region": 14,
-    "lobby_password": "wuxian",
+    "lobby_password": "",
     "max_players_per_room": 24,
     "seeding_mode": true,
     "debug_mode": true,
     "debug_max_bots_per_room": 23,
-    "accounts_per_proxy": 6
+    "accounts_per_proxy": 6,
+    "shared_steam_data_path": "../shared_steam_data"
   },
   "fleets": [
     {

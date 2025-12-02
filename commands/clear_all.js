@@ -36,6 +36,18 @@ try {
     process.exit(1);
 }
 
+// [新增] 获取共享验证数据目录
+const sharedDataPath = config.global_settings.shared_steam_data_path || "../shared_steam_data";
+const steamDataDir = path.resolve(projectRoot, sharedDataPath);
+
+// 确保共享目录存在
+if (!fs.existsSync(steamDataDir)) {
+    console.log(`📁 共享验证数据目录不存在，创建: ${steamDataDir}`);
+    fs.mkdirSync(steamDataDir, { recursive: true });
+} else {
+    console.log(`📁 使用共享验证数据目录: ${steamDataDir}`);
+}
+
 // 加载代理列表
 let proxies = [];
 try {
@@ -141,7 +153,7 @@ function clearAccount(accountData, index, total) {
         const proxy = accountData.proxy;
         
         const steamOptions = {
-            dataDirectory: path.join(projectRoot, "steam_data")
+            dataDirectory: steamDataDir
         };
         
         if (proxy) {
