@@ -113,66 +113,125 @@ async function processAll() {
 }
 
 function processOne(account, steamProxy, index) {
-    const steamOptions = { dataDirectory: steamDataDir };
-    if (steamProxy) steamOptions.httpProxy = steamProxy;
+    let currentProxyIndex = -1;
+    let retryCount = 0;
+    const maxRetries = 3; // 最多尝试 3 个代理
     
-    const client = new SteamUser(steamOptions);
-    let isCompleted = false;
-    let webSessionReceived = false;
-    
-    const finish = (success) => {
-        if (isCompleted) return;
-        isCompleted = true;
-        
-        if (success) {
-            successCount++;
-        } else {
-            failCount++;
-        }
-        
-        try {
-            client.removeAllListeners();
-            client.logOff();
-        } catch (e) {}
-    };
-    
-    // 60秒超时
-    setTimeout(() => {
-        if (!isCompleted) finish(false);
-    }, 60000);
-    
-    client.on('error', () => {
-        // 静默处理
-    });
-    
-    client.on('webSession', (sessionID, cookies) => {
-        if (webSessionReceived || isCompleted) return;
-        webSessionReceived = true;
-        
-        subscribeViaLocalProxy(sessionID, cookies, finish);
-    });
-    
-    client.on('loggedOn', () => {
-        if (isCompleted) return;
-        client.webLogOn();
-    });
-    
-    const logOnOptions = {
-        accountName: account.username,
-        password: account.password,
-        promptSteamGuardCode: false,
-        rememberPassword: true,
-        logonID: Math.floor(Math.random() * 1000000),
-        shouldRememberPassword: true
-    };
-    
-    if (account.shared_secret && account.shared_secret.length > 5) {
-        try {
-            logOnOptions.twoFactorCode = SteamTotp.generateAuthCode(account.shared_secret);
-        } catch (e) {}
+    // 找到初始代理在 proxies 数组中的索引
+    if (steamProxy && proxies.length > 0) {
+        currentProxyIndex = proxies.indexOf(steamProxy);
+        if (currentProxyIndex === -1) currentProxyIndex = 0;
     }
     
-    client.logOn(logOnOptions);
+    function attemptWithProxy(proxyToUse) {
+        const steamOptions = { dataDirectory: steamDataDir };
+        if (proxyToUse) steamOptions.httpProxy = proxyToUse;
+        
+        const client = new SteamUser(steamOptions);
+        let isCompleted = false;
+        let webSessionReceived = false;
+        let timeoutHandle = null;
+        
+        const finish = (success) => {
+            if (isCompleted) return;
+            isCompleted = true;
+            
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            
+            if (success) {
+                successCount++;
+            } else {
+                failCount++;
+            }
+            
+            try {
+                client.removeAllListeners();
+                client.logOff();
+            } catch (e) {}
+        };
+        
+        // 60秒超时
+        timeoutHandle = setTimeout(() => {
+            if (!isCompleted) {
+                // 超时 - 尝试下一个代理
+                tryNextProxy('登录超时');
+            }
+        }, 60000);
+        
+        const tryNextProxy = (reason) => {
+            if (isCompleted) return;
+            isCompleted = true;
+            
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            
+            try {
+                client.removeAllListeners();
+                client.logOff();
+            } catch (e) {}
+            
+            retryCount++;
+            
+            if (retryCount >= maxRetries || proxies.length === 0) {
+                // 达到最大重试次数，标记为失败
+                failCount++;
+                return;
+            }
+            
+            // 切换到下一个代理
+            if (proxies.length > 0) {
+                currentProxyIndex = (currentProxyIndex + 1) % proxies.length;
+                const nextProxy = proxies[currentProxyIndex];
+                attemptWithProxy(nextProxy);
+            } else {
+                failCount++;
+            }
+        };
+        
+        client.on('error', (err) => {
+            if (isCompleted) return;
+            
+            // 针对代理超时错误 - 立即切换代理
+            if (err.message.includes('Proxy connection timed out') || 
+                err.message.includes('timed out') || 
+                err.message.includes('ETIMEDOUT') || 
+                err.message.includes('ECONNRESET') || 
+                err.message.includes('ECONNREFUSED')) {
+                tryNextProxy(err.message);
+            }
+        });
+        
+        client.on('webSession', (sessionID, cookies) => {
+            if (webSessionReceived || isCompleted) return;
+            webSessionReceived = true;
+            
+            subscribeViaLocalProxy(sessionID, cookies, finish);
+        });
+        
+        client.on('loggedOn', () => {
+            if (isCompleted) return;
+            client.webLogOn();
+        });
+        
+        const logOnOptions = {
+            accountName: account.username,
+            password: account.password,
+            promptSteamGuardCode: false,
+            rememberPassword: true,
+            logonID: Math.floor(Math.random() * 1000000),
+            shouldRememberPassword: true
+        };
+        
+        if (account.shared_secret && account.shared_secret.length > 5) {
+            try {
+                logOnOptions.twoFactorCode = SteamTotp.generateAuthCode(account.shared_secret);
+            } catch (e) {}
+        }
+        
+        client.logOn(logOnOptions);
+    }
+    
+    // 开始第一次尝试
+    attemptWithProxy(steamProxy);
 }
 
 function subscribeViaLocalProxy(sessionID, cookies, finish) {

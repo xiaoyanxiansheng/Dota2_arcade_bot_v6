@@ -1,3 +1,4 @@
+http://lrkksoef:47592sgxxc1k@45.38.78.159:6096
 http://lrkksoef:47592sgxxc1k@64.137.58.224:6470
 http://lrkksoef:47592sgxxc1k@104.239.33.125:6480
 http://lrkksoef:47592sgxxc1k@208.70.11.36:6117
@@ -45,7 +46,6 @@ http://lrkksoef:47592sgxxc1k@23.236.216.3:6033
 http://lrkksoef:47592sgxxc1k@45.131.95.24:5688
 http://lrkksoef:47592sgxxc1k@92.112.82.188:5423
 http://lrkksoef:47592sgxxc1k@108.165.63.6:5743
-http://lrkksoef:47592sgxxc1k@23.27.236.116:6852
 http://lrkksoef:47592sgxxc1k@172.120.112.217:5896
 http://lrkksoef:47592sgxxc1k@209.242.201.129:6175
 http://lrkksoef:47592sgxxc1k@23.26.95.92:5574
@@ -184,7 +184,6 @@ http://lrkksoef:47592sgxxc1k@82.29.245.237:7061
 http://lrkksoef:47592sgxxc1k@142.111.104.218:6228
 http://lrkksoef:47592sgxxc1k@142.111.161.184:6555
 http://lrkksoef:47592sgxxc1k@148.135.179.41:6100
-http://lrkksoef:47592sgxxc1k@23.27.203.252:6987
 http://lrkksoef:47592sgxxc1k@45.43.82.163:6157
 http://lrkksoef:47592sgxxc1k@64.64.127.2:5955
 http://lrkksoef:47592sgxxc1k@154.6.115.171:6640
@@ -201,7 +200,6 @@ http://lrkksoef:47592sgxxc1k@45.38.94.32:5953
 http://lrkksoef:47592sgxxc1k@104.249.55.67:6435
 http://lrkksoef:47592sgxxc1k@185.72.242.178:5861
 http://lrkksoef:47592sgxxc1k@104.253.36.243:5681
-http://lrkksoef:47592sgxxc1k@23.27.208.67:5777
 http://lrkksoef:47592sgxxc1k@38.154.217.30:7221
 http://lrkksoef:47592sgxxc1k@92.112.174.81:5665
 http://lrkksoef:47592sgxxc1k@92.113.7.198:6924

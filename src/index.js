@@ -922,7 +922,7 @@ class BotClient {
             const gameIdLong = Long.fromString(this.settings.custom_game_id, true);
             const detailsPayload = {
                 customGameId: gameIdLong,        
-                gameName: `Bot Room ${this.fleetId}`, // 使用车队 ID 作为房间名
+                gameName: "", // 空白房间名
                 serverRegion: this.settings.server_region, 
                 gameMode: 15,                    
                 customMaxPlayers: this.settings.max_players_per_room || 4,
@@ -990,7 +990,7 @@ class BotClient {
     createLobbyAndSeed() {
         this.roomsCreated++;
         this.currentRoomNumber = this.roomsCreated;
-        const roomName = `Bot Room ${this.fleetId} #${this.roomsCreated}`;
+        const roomName = ""; // 空白房间名
         
         // [新增] 重置分配标志，允许新房间分配小号
         this.hasAssignedFollowers = false;
@@ -1370,9 +1370,8 @@ class BotClient {
                 
                 // Leader 在播种模式下，确认房间创建成功
                 if (this.role === 'LEADER' && this.isSeeding && this.state === 'SEEDING') {
-                    const expectedRoomName = `Bot Room ${this.fleetId} #${this.currentRoomNumber}`;
-                    
-                    if (gameName === expectedRoomName || gameName.includes(this.fleetId)) {
+                    // 空白房间名，只通过 lobbyId 存在来确认房间创建成功
+                    if (lobbyId) {
                         if (this.creationTimeout) {
                             clearTimeout(this.creationTimeout);
                             this.creationTimeout = null;
