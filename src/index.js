@@ -46,6 +46,15 @@ const k_EMsgGCSOMultipleObjects = 26;        // 多对象更新
 // CSODOTALobby 的 TypeID
 const SOCACHE_TYPE_LOBBY = 2004;
 
+// 服务器区域名称映射
+const RegionNameMap = {
+    0: "Auto", 1: "US West", 2: "US East", 3: "Europe", 5: "Singapore", 
+    6: "Dubai", 7: "Australia", 8: "Stockholm", 9: "Austria", 
+    10: "Brazil", 11: "South Africa", 12: "PW Telecom", 13: "PW Unicom", 
+    14: "Chile", 15: "Peru", 16: "India", 17: "Reg:17", 18: "Reg:18", 
+    19: "Japan", 20: "Reg:20", 25: "PW Tianjin"
+};
+
 // DOTAJoinLobbyResult 枚举 (来自 dota_shared_enums.proto)
 const DOTAJoinLobbyResult = {
     DOTA_JOIN_RESULT_SUCCESS: 0,
@@ -920,10 +929,15 @@ class BotClient {
     createLobby() {
         try {
             const gameIdLong = Long.fromString(this.settings.custom_game_id, true);
+            
+            // 随机选择服务器区域
+            const regions = this.settings.server_regions || [this.settings.server_region];
+            const selectedRegion = regions[Math.floor(Math.random() * regions.length)];
+            
             const detailsPayload = {
                 customGameId: gameIdLong,        
                 gameName: "", // 空白房间名
-                serverRegion: this.settings.server_region, 
+                serverRegion: selectedRegion, 
                 gameMode: 15,                    
                 customMaxPlayers: this.settings.max_players_per_room || 4,
                 customMinPlayers: 1,
@@ -950,6 +964,9 @@ class BotClient {
             const buffer = CMsgPracticeLobbyCreate.encode(message).finish();
             
             this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyCreate | k_EMsgProtoMask, {}, buffer);
+            
+            const regionName = RegionNameMap[selectedRegion] || `Reg:${selectedRegion}`;
+            this.log(`🌐 创建房间，区域: ${regionName} (${selectedRegion})`);
             
             // [修复死循环] Leader 创建一次后就停止，不再轮询
             this.state = 'CREATING_LOBBY';
@@ -997,10 +1014,15 @@ class BotClient {
         
         try {
             const gameIdLong = Long.fromString(this.settings.custom_game_id, true);
+            
+            // 随机选择服务器区域
+            const regions = this.settings.server_regions || [this.settings.server_region];
+            const selectedRegion = regions[Math.floor(Math.random() * regions.length)];
+            
             const detailsPayload = {
                 customGameId: gameIdLong,        
                 gameName: roomName,
-                serverRegion: this.settings.server_region, 
+                serverRegion: selectedRegion, 
                 gameMode: 15,                    
                 customMaxPlayers: this.settings.max_players_per_room || 4,
                 customMinPlayers: 1,
@@ -1027,6 +1049,9 @@ class BotClient {
             const buffer = CMsgPracticeLobbyCreate.encode(message).finish();
             
             this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyCreate | k_EMsgProtoMask, {}, buffer);
+            
+            const regionName = RegionNameMap[selectedRegion] || `Reg:${selectedRegion}`;
+            this.log(`🌐 创建房间 #${this.currentRoomNumber}，区域: ${regionName}`);
             
             this.state = 'SEEDING';
             this.currentRoomMemberCount = 1;
