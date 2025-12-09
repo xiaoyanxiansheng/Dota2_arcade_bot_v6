@@ -7,73 +7,129 @@ const path = require('path');
 
 // 1. 路径配置
 const projectRoot = path.join(__dirname, '..');
-const configPath = path.join(projectRoot, 'config', 'config.json');
 
-// 2. 读取配置
-let config;
-try {
-    if (fs.existsSync(configPath)) {
-        const rawContent = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
-        config = JSON.parse(rawContent);
-    } else {
-        console.error("❌ 找不到配置文件: config/config.json");
-        process.exit(1);
-    }
-} catch (e) {
-    console.error("❌ 读取配置失败: " + e.message);
+// 2. 辅助定义
+const RegionNameMap = {
+    0: "Auto", 1: "US West", 2: "US East", 3: "Europe", 5: "Singapore", 
+    6: "Dubai", 7: "Australia", 8: "Stockholm", 9: "Austria", 
+    10: "Brazil", 11: "South Africa", 12: "PW Telecom", 13: "PW Unicom", 
+    14: "Chile", 15: "Peru", 16: "India", 17: "China", 18: "China", 
+    19: "Japan", 20: "China", 25: "PW Tianjin"
+};
+
+function formatDuration(seconds) {
+    if (!seconds || seconds < 0) return "0m";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h > 0) return `${h}h${m}m`;
+    return `${m}m`;
+}
+
+// 帮助函数：读取配置
+function loadConfig(filename) {
+    try {
+        const configPath = path.join(projectRoot, 'config', filename);
+        if (fs.existsSync(configPath)) {
+            const raw = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
+            return JSON.parse(raw);
+        }
+    } catch (e) {}
+    return null;
+}
+
+// 帮助函数：加载代理文件 (简单版)
+function loadProxiesFromFile(filename) {
+    try {
+        const p = path.resolve(projectRoot, filename);
+        if (fs.existsSync(p)) {
+            return fs.readFileSync(p, 'utf8').split('\n')
+                .map(l => l.trim()).filter(l => l.length > 0 && l.startsWith('http'));
+        }
+    } catch (e) {}
+    return [];
+}
+
+const showcaseConfig = loadConfig('config_showcase.json');
+const farmingConfig = loadConfig('config_farming.json');
+
+if (!showcaseConfig && !farmingConfig) {
+    console.error("❌ 未找到任何配置文件");
     process.exit(1);
 }
 
-// 获取账号
-let account;
-if (config.fleets[0].followers && config.fleets[0].followers.length > 0) {
-    account = config.fleets[0].followers[0];
-    console.log("[System] 选择 Follower 账号进行查询 (避免主号令牌验证)");
-} else {
-    account = config.fleets[0].leader;
-    if (Array.isArray(account)) {
-        account = account[0];
-    }
-    console.log("[System] 选择 Leader 账号进行查询");
+// 2. 获取查询账号 (优先使用 query_account)
+let account = null;
+
+// 优先使用 config_showcase.json 中的 query_account
+if (showcaseConfig && showcaseConfig.query_account) {
+    account = showcaseConfig.query_account;
+    console.log(`[System] 使用查询专用账号: ${account.username}`);
 }
 
-// 解析命令行参数
-// 用法: node list_lobbies.js [game_id|all]
-// - 不传参数或传 "all": 查询所有游戏
-// - 传具体 game_id: 只查询该游戏
+// 如果没有 query_account，使用小号
+if (!account && farmingConfig && farmingConfig.fleets) {
+    for (const fleet of farmingConfig.fleets) {
+        if (fleet.followers && fleet.followers.length > 0) {
+            account = fleet.followers[0];
+            // 还需要代理信息
+            const globalProxies = farmingConfig.proxies_file ? loadProxiesFromFile(farmingConfig.proxies_file) : [];
+            const fleetProxies = fleet.proxies || globalProxies;
+            if (!account.proxy && fleetProxies.length > 0) {
+                account.proxy = fleetProxies[0];
+            }
+            break;
+        }
+    }
+}
+
+// 如果还是没有账号，用主号
+if (!account) {
+    if (showcaseConfig && showcaseConfig.showcase_leaders && showcaseConfig.showcase_leaders.length > 0) {
+        account = showcaseConfig.showcase_leaders[0];
+    } else if (farmingConfig && farmingConfig.fleets && farmingConfig.fleets.length > 0) {
+        account = farmingConfig.fleets[0].leader;
+    }
+}
+
+if (!account) {
+    console.error("❌ 未找到可用账号");
+    process.exit(1);
+}
+
+// 3. 解析参数
 const arg = process.argv[2];
 let targetGameId = null;
 let queryAll = false;
 
-if (!arg || arg.toLowerCase() === 'all') {
+// 如果参数为空，或者是 'all'，则查询所有
+if (!arg || arg.trim() === '' || arg.toLowerCase() === 'all') {
     queryAll = true;
+    targetGameId = null; // 显式置空
     console.log("[System] 模式: 查询所有游廊游戏房间");
 } else {
     targetGameId = arg.toString().trim();
     console.log(`[System] 模式: 查询指定游戏 ID: ${targetGameId}`);
 }
 
-console.log(`[System] 使用账号: ${account.username} 进行查询...`);
-
-// 3. 消息 ID 定义
+// 4. Proto 加载
 const k_EMsgGCClientHello = 4006;
 const k_EMsgGCClientConnectionStatus = 4004;
 const k_EMsgGCJoinableCustomLobbiesRequest = 7468;
 const k_EMsgGCJoinableCustomLobbiesResponse = 7469;
 const k_EMsgProtoMask = 0x80000000;
 
-// 4. 加载 Proto
 let CMsgClientHello, CMsgJoinableCustomLobbiesRequest, CMsgJoinableCustomLobbiesResponse;
 
 try {
     const root = new protobuf.Root();
     root.resolvePath = function(origin, target) {
-        let checkPath = path.join(projectRoot, "Protobufs", target);
-        if (fs.existsSync(checkPath)) return checkPath;
-        checkPath = path.join(projectRoot, "Protobufs", "dota2", target);
-        if (fs.existsSync(checkPath)) return checkPath;
-        checkPath = path.join(projectRoot, "Protobufs", "google", "protobuf", target);
-        if (fs.existsSync(checkPath)) return checkPath;
+        if (fs.existsSync(target)) return target;
+        const p = path.join(projectRoot, "Protobufs", target);
+        if (fs.existsSync(p)) return p;
+        const p2 = path.join(projectRoot, "Protobufs", "dota2", target);
+        if (fs.existsSync(p2)) return p2;
+        const p3 = path.join(projectRoot, "Protobufs", "google", "protobuf", target);
+        if (fs.existsSync(p3)) return p3;
         return target;
     };
 
@@ -92,8 +148,9 @@ try {
     process.exit(1);
 }
 
-// 5. 初始化 Steam Client
-const sharedDataPath = config.global_settings.shared_steam_data_path || "../shared_steam_data";
+// 5. Steam Client
+const globalSettings = (showcaseConfig || farmingConfig).global_settings || {};
+const sharedDataPath = globalSettings.shared_steam_data_path || "../shared_steam_data";
 const steamDataDir = path.resolve(projectRoot, sharedDataPath);
 
 if (!fs.existsSync(steamDataDir)) {
@@ -101,38 +158,33 @@ if (!fs.existsSync(steamDataDir)) {
 }
 
 const client = new SteamUser({
-    dataDirectory: steamDataDir
+    dataDirectory: steamDataDir,
+    httpProxy: account.proxy
 });
 
-// 6. 事件监听
+let is_gc_connected = false;
+
 client.on('loggedOn', () => {
-    console.log('✅ Steam 登录成功');
+    console.log("✅ Steam 登录成功");
     client.setPersona(SteamUser.EPersonaState.Online);
     client.gamesPlayed([570]);
 });
 
 client.on('appLaunched', (appid) => {
     if (appid === 570) {
-        console.log('🎮 Dota 2 已启动，正在连接 GC...');
-        setTimeout(connectGC, 2000);
+        console.log("🎮 Dota 2 启动，连接 GC...");
+        setTimeout(sendHello, 1000);
     }
 });
 
 client.on('error', (err) => {
-    console.error('❌ Steam 错误:', err.message);
+    if (err.message === 'LoggedInElsewhere') {
+        console.error("❌ 错误: 账号已在别处登录 (请先停止挂机车队或使用其他账号)");
+    } else {
+        console.error("❌ Steam 错误: " + err.message);
+    }
     process.exit(1);
 });
-
-let is_gc_connected = false;
-
-// Region ID 映射
-const RegionMap = {
-    0: "Auto", 1: "US West", 2: "US East", 3: "Europe", 5: "Singapore", 
-    6: "Dubai", 7: "Australia", 8: "Stockholm", 9: "Austria", 
-    10: "Brazil", 11: "South Africa", 12: "PW Telecom", 13: "PW Unicom", 
-    14: "Chile", 15: "Peru", 16: "India", 17: "Reg:17", 18: "Reg:18", 
-    19: "Japan", 20: "Reg:20", 25: "PW Tianjin"
-};
 
 client.on('receivedFromGC', (appid, msgType, payload) => {
     if (appid !== 570) return;
@@ -141,193 +193,89 @@ client.on('receivedFromGC', (appid, msgType, payload) => {
     if (cleanMsgType === k_EMsgGCClientConnectionStatus) {
         if (!is_gc_connected) {
             is_gc_connected = true;
-            console.log('✅ GC 连接成功！');
-            requestLobbies();
+            console.log("📡 GC 连接成功，正在查询...");
+            queryLobbies();
         }
-    } 
-    else if (cleanMsgType === k_EMsgGCJoinableCustomLobbiesResponse) {
-        console.log('\n📡 收到房间列表响应...');
+    } else if (cleanMsgType === k_EMsgGCJoinableCustomLobbiesResponse) {
         try {
             const response = CMsgJoinableCustomLobbiesResponse.decode(payload);
             const lobbies = response.lobbies || [];
             
-            if (lobbies.length === 0) {
-                console.log(`📭 当前没有公开房间。`);
-                console.log("\n✅ 查询完成，3秒后退出...");
-                setTimeout(() => process.exit(0), 3000);
-                return;
-            }
+            console.log(`\n📊 查询结果 (总数: ${lobbies.length})`);
             
-            // 收集所有唯一的游戏 ID
-            const allGameIds = lobbies.map(l => l.customGameId ? l.customGameId.toString() : null).filter(Boolean);
+            // 过滤和收集数据
+            let count = 0;
+            const csvRows = ["Lobby ID,Game ID,Room Name,Map,Region,Members,Time,Leader Name,Leader ID,Has Password"];
             
-            // 统计信息
-            const totalPlayers = lobbies.reduce((sum, l) => sum + (l.memberCount || 0), 0);
-            const fullRooms = lobbies.filter(l => (l.memberCount || 0) >= 20).length;
-            const uniqueGames = new Set(allGameIds).size;
-            
-            const modeStr = queryAll ? "所有游廊游戏" : `游戏 ID: ${targetGameId}`;
-            const header = `查询: ${modeStr} | 房间: ${lobbies.length} | 游戏: ${uniqueGames} | 玩家: ${totalPlayers} | 高人气(>=20): ${fullRooms}\n` +
-                         "=".repeat(175) + "\n" +
-                         `| ${"Lobby ID".padEnd(18)} | ${"Game ID".padEnd(15)} | ${"Room Name".padEnd(25)} | ${"Map".padEnd(12)} | ${"Region".padEnd(12)} | ${"Memb".padEnd(4)} | ${"Time".padEnd(8)} | ${"Leader (Name/ID)".padEnd(35)} | ${"Pass".padEnd(4)} |\n` +
-                         "-".repeat(175);
-            
-            console.log('\n' + header);
-            
-            lobbies.forEach(lobby => {
-                const lobbyId = lobby.lobbyId ? lobby.lobbyId.toString() : "Unknown";
+            lobbies.forEach(l => {
+                const gid = l.customGameId ? l.customGameId.toString() : "Unknown";
                 
-                // 游戏 ID（直接显示，不带前缀）
-                const gameId = lobby.customGameId ? lobby.customGameId.toString() : "Unknown";
+                // 过滤逻辑
+                if (targetGameId && gid !== targetGameId) return;
 
-                // 房间名
-                let name = lobby.lobbyName || "Unknown";
-                name = name.replace(/[\r\n]/g, '');
-                const displayName = name.length > 23 ? name.substring(0, 20) + "..." : name;
+                count++;
+                
+                const lid = l.lobbyId ? l.lobbyId.toString() : "Unknown";
+                const roomName = (l.lobbyName || "").toString();
+                const mapName = (l.customMapName || "").toString();
+                const region = (RegionNameMap[l.serverRegion] || l.serverRegion || "").toString();
+                const members = (l.memberCount || 0).toString();
+                const hasPass = l.hasPassKey ? "Yes" : "";
+                const leaderId = l.leaderAccountId ? l.leaderAccountId.toString() : "Unknown";
+                const leaderName = (l.leaderName || "Unknown").toString();
+                const time = l.lobbyCreationTime ? formatDuration(Date.now()/1000 - l.lobbyCreationTime) : "";
 
-                // 地图名
-                let mapName = lobby.customMapName || "-";
-                if (mapName.length > 11) mapName = mapName.substring(0, 9) + "...";
-                
-                // 地区
-                const regionId = lobby.serverRegion || 0;
-                const regionName = RegionMap[regionId] || `Reg:${regionId}`;
-
-                const count = lobby.memberCount || 0;
-                
-                // 创建时间
-                let timeStr = "-";
-                if (lobby.lobbyCreationTime) {
-                    const now = Math.floor(Date.now() / 1000);
-                    const diff = now - lobby.lobbyCreationTime;
-                    if (diff < 60) timeStr = `${diff}s`;
-                    else if (diff < 3600) timeStr = `${Math.floor(diff / 60)}m`;
-                    else timeStr = `${Math.floor(diff / 3600)}h${Math.floor((diff % 3600) / 60)}m`;
-                }
-
-                // Leader (Name + ID)
-                const leaderId = lobby.leaderAccountId ? lobby.leaderAccountId.toString() : "Unknown";
-                let leaderName = lobby.leaderName || "";
-                if (leaderName.length > 15) leaderName = leaderName.substring(0, 12) + "...";
-                
-                let leaderStr = leaderName ? `${leaderName} (${leaderId})` : leaderId;
-                if (leaderStr.length > 33) leaderStr = leaderStr.substring(0, 30) + "...";
-                
-                const hasPass = lobby.hasPassKey ? "Yes" : "No";
-                
-                const line = `| ${lobbyId.padEnd(18)} | ${gameId.padEnd(15)} | ${displayName.padEnd(25)} | ${mapName.padEnd(12)} | ${regionName.padEnd(12)} | ${count.toString().padEnd(4)} | ${timeStr.padEnd(8)} | ${leaderStr.padEnd(35)} | ${hasPass.padEnd(4)} |`;
-                console.log(line);
+                // 构造 CSV 行
+                csvRows.push(`${lid},${gid},${roomName},${mapName},${region},${members},${time},${leaderName},${leaderId},${hasPass}`);
             });
-            console.log("=".repeat(175));
             
-            // 保存为 CSV 文件
-            const dataDir = path.join(projectRoot, 'data');
-            if (!fs.existsSync(dataDir)) {
-                fs.mkdirSync(dataDir, { recursive: true });
-            }
-            
-            // 生成时间戳文件名
+            console.log(`✅ 符合条件的房间: ${count}`);
+
+            // 保存 CSV - 格式化文件名为时间格式
             const now = new Date();
-            const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-            const csvFile = path.join(dataDir, `lobbies_${timestamp}.csv`);
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hour = String(now.getHours()).padStart(2, '0');
+            const minute = String(now.getMinutes()).padStart(2, '0');
+            const second = String(now.getSeconds()).padStart(2, '0');
+            const filename = `lobbies_${year}${month}${day}_${hour}${minute}${second}.csv`;
+            const filepath = path.join(projectRoot, filename);
             
-            // 生成 CSV 内容
-            const csvHeader = 'Lobby ID,Game ID,Room Name,Map,Region,Members,Time,Leader Name,Leader ID,Has Password\n';
-            let csvContent = csvHeader;
+            fs.writeFileSync(filepath, csvRows.join('\n'));
+            console.log(`\n💾 [FILE_LINK]${filepath}`);
             
-            lobbies.forEach(lobby => {
-                const lobbyId = lobby.lobbyId ? lobby.lobbyId.toString() : "";
-                const gameId = lobby.customGameId ? lobby.customGameId.toString() : "";
-                const roomName = (lobby.lobbyName || "").replace(/[\r\n,]/g, ' ');
-                const mapName = lobby.customMapName || "";
-                const regionId = lobby.serverRegion || 0;
-                const regionName = RegionMap[regionId] || `Reg:${regionId}`;
-                const members = lobby.memberCount || 0;
-                
-                let timeStr = "";
-                if (lobby.lobbyCreationTime) {
-                    const nowSec = Math.floor(Date.now() / 1000);
-                    const diff = nowSec - lobby.lobbyCreationTime;
-                    if (diff < 60) timeStr = `${diff}s`;
-                    else if (diff < 3600) timeStr = `${Math.floor(diff / 60)}m`;
-                    else timeStr = `${Math.floor(diff / 3600)}h${Math.floor((diff % 3600) / 60)}m`;
-                }
-                
-                const leaderName = (lobby.leaderName || "").replace(/,/g, ' ');
-                const leaderId = lobby.leaderAccountId ? lobby.leaderAccountId.toString() : "";
-                const hasPass = lobby.hasPassKey ? "Yes" : "No";
-                
-                csvContent += `${lobbyId},${gameId},"${roomName}",${mapName},${regionName},${members},${timeStr},"${leaderName}",${leaderId},${hasPass}\n`;
-            });
-            
-            fs.writeFileSync(csvFile, '\ufeff' + csvContent, 'utf8'); // 添加 BOM 以支持 Excel 中文
-            console.log(`\n📄 结果已保存到: ${csvFile}`);
-            
-            console.log("\n✅ 查询完成，3秒后退出...");
-            setTimeout(() => process.exit(0), 3000);
-            
+            setTimeout(() => {
+                client.logOff();
+                process.exit(0);
+            }, 1000);
+
         } catch (e) {
-            console.error("❌ 解析响应失败:", e);
+            console.error("解析响应失败: " + e.message);
+            process.exit(1);
         }
     }
 });
 
-// 7. 功能函数
-function connectGC() {
+function sendHello() {
     const payload = { client_session_id: 0, engine: 2, client_launcher: 0 };
     const message = CMsgClientHello.create(payload);
     const buffer = CMsgClientHello.encode(message).finish();
     client.sendToGC(570, k_EMsgGCClientHello | k_EMsgProtoMask, {}, buffer);
-    
-    const helloInterval = setInterval(() => {
-        if (!is_gc_connected) {
-            client.sendToGC(570, k_EMsgGCClientHello | k_EMsgProtoMask, {}, buffer);
-        } else {
-            clearInterval(helloInterval);
-        }
-    }, 5000);
 }
 
-function requestLobbies() {
-    let payload = { server_region: 0 };
+function queryLobbies() {
+    const payload = { server_region: 0 };
+    if (targetGameId) {
+        payload.custom_game_id = Long.fromString(targetGameId, true);
+    }
     
-    if (queryAll) {
-        console.log(`🔍 正在查询所有游廊游戏的房间列表...`);
-    } else {
-        const gameIdLong = Long.fromString(targetGameId, true);
-        payload.custom_game_id = gameIdLong;
-        console.log(`🔍 正在查询游戏 ID ${targetGameId} 的房间列表...`);
-    }
-
-    try {
-        const message = CMsgJoinableCustomLobbiesRequest.create(payload);
-        const buffer = CMsgJoinableCustomLobbiesRequest.encode(message).finish();
-        
-        client.sendToGC(570, k_EMsgGCJoinableCustomLobbiesRequest | k_EMsgProtoMask, {}, buffer);
-        
-        setTimeout(() => {
-            console.log("⚠️ 查询超时 (30秒未收到响应)");
-            process.exit(0);
-        }, 30000);
-        
-    } catch (err) {
-        console.error("❌ 发送请求失败:", err);
-    }
+    const message = CMsgJoinableCustomLobbiesRequest.create(payload);
+    const buffer = CMsgJoinableCustomLobbiesRequest.encode(message).finish();
+    client.sendToGC(570, k_EMsgGCJoinableCustomLobbiesRequest | k_EMsgProtoMask, {}, buffer);
 }
 
-// 8. 启动登录
-const logOnOptions = {
+client.logOn({
     accountName: account.username,
-    password: account.password,
-    promptSteamGuardCode: false,
-    rememberPassword: true
-};
-
-if (account.shared_secret) {
-    try {
-        logOnOptions.twoFactorCode = SteamTotp.generateAuthCode(account.shared_secret);
-    } catch (e) {}
-}
-
-console.log("🚀 开始登录 Steam...");
-client.logOn(logOnOptions);
+    password: account.password
+});

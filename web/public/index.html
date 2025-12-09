@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dota 2 Bot 控制台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        .log-window {
+            height: 500px;
+            overflow-y: auto;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
+        }
+        .log-entry { margin: 2px 0; border-bottom: 1px solid #333; padding: 2px 5px; }
+        .log-info { color: #d4d4d4; }
+        .log-success { color: #4ade80; }
+        .log-warning { color: #facc15; }
+        .log-error { color: #f87171; }
+        
+        /* 滚动条样式 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e1e1e; }
+        ::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #777; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 h-screen flex flex-col overflow-hidden">
+    <div id="app" class="flex h-full">
+        
+        <!-- 侧边栏 -->
+        <div class="w-64 bg-gray-800 border-r border-gray-700 flex flex-col">
+            <div class="p-4 font-bold text-xl border-b border-gray-700 flex items-center">
+                <span class="text-blue-500 mr-2">🤖</span> Dota 2 Bot
+            </div>
+            
+            <nav class="flex-1 overflow-y-auto p-2 space-y-2">
+                <div class="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">控制面板</div>
+                
+                <!-- 展示车队 -->
+                <div class="bg-gray-700/50 rounded p-3 mb-2">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-medium">展示车队</span>
+                        <span :class="status.showcase ? 'bg-green-500' : 'bg-red-500'" class="w-2 h-2 rounded-full"></span>
+                    </div>
+                    <div class="flex space-x-2 mb-2">
+                        <button @click="toggleProcess('showcase', 'start')" :disabled="status.showcase" class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">启动</button>
+                        <button @click="toggleProcess('showcase', 'stop')" :disabled="!status.showcase" class="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">停止</button>
+                    </div>
+                    <div class="border-t border-gray-600 pt-2 mt-2">
+                        <label class="text-xs text-gray-400 block mb-1">大号验证</label>
+                        <select v-model="selectedShowcaseLeader" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-1">
+                            <option value="">-- 选择账号 --</option>
+                            <option v-for="(leader, idx) in showcaseLeaders" :key="idx" :value="leader.username">{{ leader.username }}</option>
+                        </select>
+                        <button @click="verifyLeader('showcase', selectedShowcaseLeader)" :disabled="!selectedShowcaseLeader || toolStatus.running" class="w-full bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-xs py-1 rounded">验证</button>
+                    </div>
+                </div>
+
+                <!-- 挂机车队 -->
+                <div class="bg-gray-700/50 rounded p-3 mb-2">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-medium">挂机车队</span>
+                        <span :class="status.farming ? 'bg-green-500' : 'bg-red-500'" class="w-2 h-2 rounded-full"></span>
+                    </div>
+                    <div class="flex space-x-2 mb-2">
+                        <button @click="toggleProcess('farming', 'start')" :disabled="status.farming" class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">启动</button>
+                        <button @click="toggleProcess('farming', 'stop')" :disabled="!status.farming" class="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">停止</button>
+                    </div>
+                    <div class="border-t border-gray-600 pt-2 mt-2">
+                        <label class="text-xs text-gray-400 block mb-1">大号验证</label>
+                        <select v-model="selectedFarmingLeader" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-1">
+                            <option value="">-- 选择账号 --</option>
+                            <option v-for="(leader, idx) in farmingLeaders" :key="idx" :value="leader.username">{{ leader.username }}</option>
+                        </select>
+                        <button @click="verifyLeader('farming', selectedFarmingLeader)" :disabled="!selectedFarmingLeader || toolStatus.running" class="w-full bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-xs py-1 rounded">验证</button>
+                    </div>
+                </div>
+
+                <!-- 全局操作 -->
+                <button @click="runTool('clear_all')" class="w-full bg-red-800 hover:bg-red-700 text-white py-2 rounded text-sm font-medium mb-4 flex items-center justify-center">
+                    <span v-if="toolStatus.running && toolStatus.name === 'Clear All'" class="animate-spin mr-2">⏳</span>
+                    🧹 清理所有进程
+                </button>
+
+                <div class="border-t border-gray-700 my-2"></div>
+                <div class="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">工具箱</div>
+
+                <!-- 订阅地图 -->
+                <button @click="runTool('subscribe_map')" :disabled="toolStatus.running" class="w-full bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-xs py-2 rounded mb-2 flex items-center justify-center">
+                    <span v-if="toolStatus.running && toolStatus.name === 'Subscribe Maps'" class="animate-spin mr-2">⏳</span>
+                    🗺️ 批量订阅地图
+                </button>
+
+                <!-- 查询房间 -->
+                <div class="space-y-2">
+                    <label class="text-xs text-gray-400">查询房间 (测试项目:{{ queryGameId || '全部' }})</label>
+                    <input v-model="searchGameId" placeholder="留空查所有" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs">
+                    <button @click="runTool('list_lobbies', { gameId: searchGameId })" :disabled="toolStatus.running" class="w-full bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-xs py-1 rounded flex items-center justify-center">
+                        <span v-if="toolStatus.running && toolStatus.name === 'List Lobbies'" class="animate-spin mr-2">⏳</span>
+                        🔍 查询
+                    </button>
+                </div>
+
+            </nav>
+            
+            <div class="p-4 border-t border-gray-700 text-xs text-gray-500 text-center">
+                Dota 2 Arcade Bot v6.0
+            </div>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+            <!-- 顶部 Tab -->
+            <div class="bg-gray-800 border-b border-gray-700 px-4 flex items-center">
+                <!-- 日志页签下拉菜单 -->
+                <div class="relative group">
+                    <button :class="currentTab.startsWith('log') ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'" class="px-4 py-3 border-b-2 font-medium text-sm transition flex items-center">
+                        运行日志 <span class="ml-1 text-xs">▼</span>
+                    </button>
+                    <div class="absolute left-0 top-full bg-gray-700 rounded shadow-lg z-20 hidden group-hover:block min-w-max">
+                        <button @click="currentTab = 'log_all'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_all' ? 'text-blue-400' : 'text-gray-200'">📋 全部日志</button>
+                        <button @click="currentTab = 'log_showcase'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_showcase' ? 'text-blue-400' : 'text-gray-200'">🎭 展示车队</button>
+                        <button @click="currentTab = 'log_farming'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_farming' ? 'text-blue-400' : 'text-gray-200'">🌾 挂机车队</button>
+                        <button @click="currentTab = 'log_cleanup'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_cleanup' ? 'text-blue-400' : 'text-gray-200'">🧹 清理日志</button>
+                        <button @click="currentTab = 'log_subscribe'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_subscribe' ? 'text-blue-400' : 'text-gray-200'">🗺️ 订阅日志</button>
+                        <button @click="currentTab = 'log_query'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_query' ? 'text-blue-400' : 'text-gray-200'">🔍 查询日志</button>
+                    </div>
+                </div>
+                <button @click="loadConfig('showcase')" :class="currentTab === 'config_showcase' ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'" class="px-4 py-3 border-b-2 font-medium text-sm transition">展示配置</button>
+                <button @click="loadConfig('farming')" :class="currentTab === 'config_farming' ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'" class="px-4 py-3 border-b-2 font-medium text-sm transition">挂机配置</button>
+            </div>
+
+            <!-- 内容区域 -->
+            <div class="flex-1 bg-gray-900 overflow-hidden relative">
+                
+                <!-- 日志 Tab -->
+                <div v-show="currentTab.startsWith('log')" class="h-full flex flex-col p-4">
+                    <div class="flex justify-between items-center mb-2">
+                        <h2 class="text-sm font-semibold text-gray-400">{{ logTabTitle }}</h2>
+                        <button @click="clearCurrentLogs" class="text-xs text-gray-500 hover:text-white">清空日志</button>
+                    </div>
+                    
+                    <!-- Stats 固定显示区（仅挂机日志） -->
+                    <div v-if="currentTab === 'log_farming' && farmingStats" class="bg-gray-800 border border-blue-500/50 rounded p-3 mb-2 text-sm">
+                        <div class="flex items-center">
+                            <span class="text-blue-400 font-bold mr-2">📊 实时状态</span>
+                            <span class="text-gray-300">{{ farmingStats }}</span>
+                        </div>
+                    </div>
+                    
+                    <div ref="logContainer" class="log-window rounded border border-gray-700 flex-1 p-2">
+                        <div v-for="(log, idx) in filteredLogs" :key="idx" class="log-entry" :class="`log-${log.type}`">
+                            <span class="opacity-50">[{{ log.timestamp }}]</span>
+                            <span class="font-bold mx-1">[{{ log.source }}]</span>
+                            <span v-html="formatMessage(log.message)"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 配置 Tab -->
+                <div v-show="currentTab.startsWith('config')" class="h-full flex flex-col p-4">
+                    <div class="flex justify-between items-center mb-2">
+                        <h2 class="text-sm font-semibold text-gray-400">
+                            {{ currentTab === 'config_showcase' ? 'config_showcase.json' : 'config_farming.json' }}
+                        </h2>
+                        <div class="space-x-2">
+                            <span v-if="saveMessage" class="text-xs text-green-500">{{ saveMessage }}</span>
+                            <button @click="saveConfig()" class="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded">保存修改</button>
+                        </div>
+                    </div>
+                    <textarea v-model="configContent" class="flex-1 bg-gray-800 border border-gray-700 rounded p-4 font-mono text-sm resize-none focus:outline-none focus:border-blue-500"></textarea>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Steam Guard 验证码弹窗 -->
+        <div v-if="steamGuardVisible" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50" @click.self="cancelSteamGuard">
+            <div class="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 shadow-2xl border border-gray-700">
+                <h3 class="text-lg font-semibold text-white mb-4">🔐 Steam Guard 验证</h3>
+                <p class="text-sm text-gray-400 mb-4">需要验证码 ({{ steamGuardDomain }})</p>
+                <input 
+                    v-model="steamGuardCode" 
+                    @keyup.enter="submitSteamGuard"
+                    type="text" 
+                    placeholder="请输入验证码"
+                    class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white mb-4 focus:outline-none focus:border-blue-500"
+                    autofocus
+                >
+                <div class="flex space-x-2">
+                    <button @click="submitSteamGuard" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded font-medium transition">提交</button>
+                    <button @click="cancelSteamGuard" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-2 rounded font-medium transition">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, nextTick, watch } = Vue;
+        const socket = io();
+
+        createApp({
+            setup() {
+                const status = ref({ showcase: false, farming: false });
+                const toolStatus = ref({ running: false, name: null });
+                const logs = ref([]);
+                const currentTab = ref('log_all');
+                const logContainer = ref(null);
+                const farmingStats = ref(null); // 挂机车队实时状态
+                
+                // 配置编辑
+                const configContent = ref('');
+                const currentConfigType = ref(null);
+                const saveMessage = ref('');
+
+                // 工具参数
+                const searchGameId = ref('');
+                const queryGameId = ref('');
+
+                // 领队列表
+                const showcaseLeaders = ref([]);
+                const farmingLeaders = ref([]);
+                const selectedShowcaseLeader = ref('');
+                const selectedFarmingLeader = ref('');
+
+                // Steam Guard 验证码
+                const steamGuardVisible = ref(false);
+                const steamGuardDomain = ref('');
+                const steamGuardCode = ref('');
+                const steamGuardKey = ref('');
+
+                // 自动滚动日志
+                const scrollToBottom = () => {
+                    nextTick(() => {
+                        if (logContainer.value) {
+                            logContainer.value.scrollTop = logContainer.value.scrollHeight;
+                        }
+                    });
+                };
+
+                // 日志页签标题
+                const logTabTitle = computed(() => {
+                    const titles = {
+                        'log_all': '📋 全部日志',
+                        'log_showcase': '🎭 展示车队日志',
+                        'log_farming': '🌾 挂机车队日志',
+                        'log_cleanup': '🧹 清理日志',
+                        'log_subscribe': '🗺️ 订阅日志',
+                        'log_query': '🔍 查询日志'
+                    };
+                    return titles[currentTab.value] || '系统日志';
+                });
+
+                // 过滤日志
+                const filteredLogs = computed(() => {
+                    const tab = currentTab.value;
+                    if (tab === 'log_all') return logs.value;
+                    
+                    return logs.value.filter(log => {
+                        const src = log.source.toLowerCase();
+                        const msg = log.message.toLowerCase();
+                        switch (tab) {
+                            case 'log_showcase':
+                                // 展示车队：包括 showcase 和 showcase-cleanup
+                                return src === 'showcase' || src === 'showcase-cleanup' ||
+                                       (src === 'system' && msg.includes('showcase'));
+                            case 'log_farming':
+                                // 挂机车队：包括 farming 和 farming-cleanup
+                                return src === 'farming' || src === 'farming-cleanup' ||
+                                       (src === 'system' && msg.includes('farming'));
+                            case 'log_cleanup':
+                                // 清理日志：只显示「清理所有进程」的日志
+                                return src === 'clear_all' || src === 'clear-all' ||
+                                       (src === 'system' && msg.includes('清理所有'));
+                            case 'log_subscribe':
+                                return src === 'subscribe' || src === 'subscribe_map' ||
+                                       (src === 'system' && msg.includes('订阅'));
+                            case 'log_query':
+                                return src === 'tool' || src === 'list_lobbies' ||
+                                       (src === 'system' && msg.includes('查询'));
+                            default:
+                                return true;
+                        }
+                    });
+                });
+
+                // 清空当前页签日志
+                const clearCurrentLogs = () => {
+                    if (currentTab.value === 'log_all') {
+                        logs.value = [];
+                    } else {
+                        // 只保留不属于当前页签的日志
+                        logs.value = logs.value.filter(log => !filteredLogs.value.includes(log));
+                    }
+                };
+
+                // 格式化日志消息
+                const formatMessage = (msg) => {
+                    // 识别文件链接标记
+                    if (msg.includes('[FILE_LINK]')) {
+                        const filepath = msg.replace('[FILE_LINK]', '').trim();
+                        const filename = filepath.split('\\').pop();
+                        return `结果已保存到: <a href="/api/csv/${filename}" target="_blank" class="text-blue-400 hover:text-blue-300 underline">${filename}</a> 📥`;
+                    }
+                    return msg.replace(/\n/g, '<br>');
+                };
+
+                // Socket 监听
+                onMounted(() => {
+                    socket.on('log', (log) => {
+                        logs.value.push(log);
+                        if (logs.value.length > 1000) logs.value.shift();
+                        scrollToBottom();
+                        
+                        // 提取挂机车队 Stats 信息
+                        if (log.source === 'farming' && log.message.includes('[Stats]')) {
+                            farmingStats.value = log.message.replace(/\[Stats\]\s*/, '').trim();
+                        }
+                        
+                        // 车队停止/清理完成时，清空 Stats
+                        if (log.message.includes('车队清理完成') || 
+                            log.message.includes('进程已完全停止') ||
+                            log.message.includes('farming 进程已退出')) {
+                            farmingStats.value = null;
+                        }
+                    });
+
+                    socket.on('status', (newStatus) => {
+                        status.value = { ...status.value, ...newStatus };
+                        // 挂机车队停止时，清空 Stats
+                        if (newStatus.farming === false) {
+                            farmingStats.value = null;
+                        }
+                    });
+                    
+                    socket.on('toolStatus', (newToolStatus) => {
+                        toolStatus.value = newToolStatus;
+                    });
+
+                    // 获取初始状态
+                    fetch('/api/status').then(r => r.json()).then(res => {
+                        status.value = { showcase: res.showcase, farming: res.farming };
+                        toolStatus.value = res.tool;
+                    });
+
+                    // 监听 Steam Guard 请求
+                    socket.on('needSteamGuard', ({ key, domain }) => {
+                        steamGuardVisible.value = true;
+                        steamGuardDomain.value = domain;
+                        steamGuardKey.value = key;
+                        steamGuardCode.value = '';
+                    });
+
+                    // 加载领队列表
+                    loadLeaders();
+                });
+
+                // API 调用
+                const toggleProcess = async (name, action) => {
+                    // 切换到对应车队的日志页签（启动和停止都在同一个页签）
+                    currentTab.value = name === 'showcase' ? 'log_showcase' : 'log_farming';
+                    try {
+                        await fetch(`/api/process/${name}/${action}`, { method: 'POST' });
+                    } catch (e) {
+                        logs.value.push({ timestamp: '', source: 'System', message: `API Error: ${e.message}`, type: 'error' });
+                    }
+                };
+
+                const runTool = async (name, body = {}) => {
+                    // 根据工具类型切换到对应日志页签
+                    if (name === 'clear_all') {
+                        currentTab.value = 'log_cleanup';
+                    } else if (name === 'subscribe_map') {
+                        currentTab.value = 'log_subscribe';
+                    } else if (name === 'list_lobbies') {
+                        currentTab.value = 'log_query';
+                    } else {
+                        currentTab.value = 'log_all';
+                    }
+                    try {
+                        const res = await fetch(`/api/tool/${name}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body)
+                        });
+                        if (!res.ok) {
+                            const err = await res.json();
+                            alert('操作失败: ' + err.error);
+                        }
+                    } catch (e) {
+                        alert('请求失败');
+                    }
+                };
+
+                const loadLeaders = async () => {
+                    try {
+                        // 加载展示车队领队
+                        const showcaseRes = await fetch('/api/config/showcase');
+                        const showcaseData = await showcaseRes.json();
+                        showcaseLeaders.value = showcaseData.showcase_leaders || [];
+                        
+                        // 加载测试项目 ID
+                        if (showcaseData.global_settings && showcaseData.global_settings.custom_game_id) {
+                            queryGameId.value = showcaseData.global_settings.custom_game_id;
+                        }
+
+                        // 加载挂机车队领队
+                        const farmingRes = await fetch('/api/config/farming');
+                        const farmingData = await farmingRes.json();
+                        farmingLeaders.value = (farmingData.fleets || []).map(f => f.leader).filter(l => l);
+                    } catch (e) {
+                        console.error('加载领队列表失败', e);
+                    }
+                };
+
+                const verifyLeader = async (type, username) => {
+                    if (!username) return;
+                    // 切换到对应车队的日志页签
+                    currentTab.value = type === 'showcase' ? 'log_showcase' : 'log_farming';
+                    try {
+                        const res = await fetch(`/api/tool/login_leader`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ type, username })
+                        });
+                        if (!res.ok) {
+                            const err = await res.json();
+                            alert('操作失败: ' + err.error);
+                        }
+                    } catch (e) {
+                        alert('请求失败');
+                    }
+                };
+
+                const submitSteamGuard = () => {
+                    if (!steamGuardCode.value.trim()) {
+                        alert('请输入验证码');
+                        return;
+                    }
+                    socket.emit('submitSteamGuard', { 
+                        key: steamGuardKey.value, 
+                        code: steamGuardCode.value.trim() 
+                    });
+                    steamGuardVisible.value = false;
+                };
+
+                const cancelSteamGuard = () => {
+                    steamGuardVisible.value = false;
+                };
+
+                const loadConfig = async (type) => {
+                    currentTab.value = `config_${type}`;
+                    currentConfigType.value = type;
+                    saveMessage.value = '';
+                    try {
+                        const res = await fetch(`/api/config/${type}`);
+                        const data = await res.json();
+                        configContent.value = JSON.stringify(data, null, 2);
+                    } catch (e) {
+                        configContent.value = '// 加载失败';
+                    }
+                };
+
+                const saveConfig = async () => {
+                    try {
+                        const json = JSON.parse(configContent.value);
+                        const res = await fetch(`/api/config/${currentConfigType.value}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(json)
+                        });
+                        
+                        if (res.ok) {
+                            saveMessage.value = '保存成功!';
+                            setTimeout(() => saveMessage.value = '', 3000);
+                        } else {
+                            alert('保存失败');
+                        }
+                    } catch (e) {
+                        alert('JSON 格式错误，请检查');
+                    }
+                };
+
+                return {
+                    status, toolStatus, logs, currentTab, logContainer,
+                    toggleProcess, runTool, formatMessage,
+                    configContent, loadConfig, saveConfig, saveMessage,
+                    searchGameId, queryGameId,
+                    showcaseLeaders, farmingLeaders, selectedShowcaseLeader, selectedFarmingLeader,
+                    loadLeaders, verifyLeader,
+                    steamGuardVisible, steamGuardDomain, steamGuardCode, 
+                    submitSteamGuard, cancelSteamGuard,
+                    // 日志页签相关
+                    logTabTitle, filteredLogs, clearCurrentLogs, farmingStats
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

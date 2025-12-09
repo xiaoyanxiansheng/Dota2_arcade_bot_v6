@@ -1,0 +1,39 @@
+{
+  "global_settings": {
+    "target_app_id": 570,
+    "custom_game_id": "3586896069",
+    "server_regions": [
+      1,
+      2,
+      5,
+      7,
+      14,
+      19
+    ],
+    "max_players_per_room": 24,
+    "rotation_cycle_minutes": 15,
+    "min_lobby_count_for_rotation": 30,
+    "debug_mode": true,
+    "shared_steam_data_path": "../shared_steam_data"
+  },
+  "showcase_leaders": [
+    {
+      "username": "a02821145",
+      "password": "Wuxianqiyuan2025",
+      "shared_secret": "",
+      "proxy": "http://lrkksoef:47592sgxxc1k@64.137.58.224:6470"
+    },
+    {
+      "username": "CriticalStrikeStudio",
+      "password": "MarCsStudio2023",
+      "shared_secret": "",
+      "proxy": "http://lrkksoef:47592sgxxc1k@64.137.58.224:6470"
+    }
+  ],
+  "query_account": {
+    "username": "hkinzkccm679426",
+    "password": "8m4Xf4xShad3",
+    "shared_secret": "",
+    "proxy": "http://lrkksoef:47592sgxxc1k@23.109.219.238:6462"
+  }
+}
