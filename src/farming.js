@@ -1,15 +1,15 @@
 /**
- * 挂机车队独立程序 v2.0
+ * 挂机车队独立程序 v3.0 - 分布式版本
  * 
  * 核心逻辑：
- * 1. 小号批量登录池子：根据IP数量分批登录，30秒一批
- * 2. 主号创建房间后，从池子取23个小号一批加入
- * 3. 小号只加入分配的房间，失败换IP重试
- * 4. 主号人数>5后离开创建新房间
- * 5. 小号退出后回到池子等待重新分配
+ * 1. 从 config_leaders.json 加载主号配置
+ * 2. 从 config/farm/ 目录加载多个小号配置（config_000.json, config_001.json...）
+ * 3. 串行处理每个配置：当前配置的小号全部进入房间后，切换到下一个配置
+ * 4. 主号在开房间时使用当前配置的代理（按顺序分配）
+ * 5. 支持手动跳过当前配置
  * 
  * 使用方法：
- * node src/farming.js --config=config/config_farming.json
+ * node src/farming.js
  */
 
 const SteamUser = require('steam-user');
@@ -1128,6 +1128,41 @@ class LeaderBot {
         } catch (err) {}
     }
 
+    // 换代理重连（用于配置切换时）
+    reconnectWithNewProxy(newProxy) {
+        this.log(`🔄 切换代理重连...`);
+        
+        // 先离开当前房间
+        if (this.currentLobbyId) {
+            this.leaveLobby();
+        }
+        
+        // 清理当前连接
+        if (this.ready_up_heartbeat) {
+            clearInterval(this.ready_up_heartbeat);
+            this.ready_up_heartbeat = null;
+        }
+        this.is_gc_connected = false;
+        this.stopped = false; // 重置停止标记
+        
+        try {
+            if (this.client) {
+                this.client.logOff();
+                this.client.removeAllListeners();
+                this.client = null;
+            }
+        } catch (err) {}
+        
+        // 使用新代理
+        this.proxy = newProxy;
+        this.state = 'OFFLINE';
+        
+        // 延迟后重新启动
+        setTimeout(() => {
+            this.start();
+        }, 2000);
+    }
+
     cleanup() {
         if (this.ready_up_heartbeat) clearInterval(this.ready_up_heartbeat);
         
@@ -1149,80 +1184,216 @@ class LeaderBot {
 }
 
 // ============================================
-// FarmingManager - 挂机车队管理器
+// FarmingManager - 挂机车队管理器 v3.0 (分布式版本) v3.0 (分布式版本)
 // ============================================
 class FarmingManager {
-    constructor(config, proxies) {
-        this.settings = config.global_settings;
-        this.fleets = config.fleets || [];
-        this.proxies = proxies;
+    constructor(leadersConfig, farmConfigNames) {
+        this.settings = leadersConfig.global_settings;
+        this.leadersConfig = leadersConfig.leaders || [];
+        this.farmConfigNames = farmConfigNames; // ['config_000', 'config_001', ...]
         
+        // 当前配置状态
+        this.currentConfigIndex = 0;
+        this.currentConfigName = null;
+        this.currentConfig = null;
+        this.currentProxies = [];
+        
+        // 时间统计
+        this.startTime = null;       // 总运行开始时间
+        this.configStartTime = null; // 当前配置开始时间
+        
+        // Bot管理
         this.pool = new FollowerPool(this);
         this.leaders = [];
-        this.allFollowers = [];
+        this.currentFollowers = [];  // 当前配置的小号
+        
+        // 统计
+        this.totalRoomsCreated = 0;
+        this.configStats = {};       // 每个配置的统计
         
         // 登录参数
-        this.loginInterval = 100; // 每个小号间隔100ms（0.1秒）
-        this.retryInterval = 60000; // 失败重试间隔60秒
+        this.loginInterval = 100;    // 每个小号间隔100ms
+        this.retryInterval = 60000;  // 失败重试间隔60秒
+        this.retryTimer = null;
+        
+        // 完成检查
+        this.completeCheckTimer = null;
     }
 
     start() {
-        logSection('挂机车队启动');
+        this.startTime = Date.now();
         
-        // 收集所有小号账号
-        const allFollowerAccounts = [];
-        this.fleets.forEach(fleet => {
-            if (fleet.followers) {
-                allFollowerAccounts.push(...fleet.followers);
+        logSection('Dota2 挂机车队 v3.0 (分布式版本)');
+        logInfo('System', `模式: 分布式串行处理`);
+        logInfo('System', `游戏ID: ${this.settings.custom_game_id}`);
+        logInfo('System', `房间密码: ${this.settings.lobby_password}`);
+        logInfo('System', `Seeding阈值: ${this.settings.seeding_threshold || 5} 人`);
+        logInfo('System', `每房间最大人数: ${this.settings.max_players_per_room || 24} 人`);
+        logInfo('System', `主号数量: ${this.leadersConfig.length} 个`);
+        logInfo('System', `配置数量: ${this.farmConfigNames.length} 个`);
+        
+        // 列出所有配置
+        this.farmConfigNames.forEach((name, idx) => {
+            logInfo('System', `   ${idx + 1}. ${name}`);
+        });
+        
+        // 创建主号Bot（但此时不启动，等加载配置后再启动）
+        this.leadersConfig.forEach((leaderAccount, idx) => {
+            const leaderBot = new LeaderBot(
+                leaderAccount,
+                this.settings,
+                null,  // 代理稍后设置
+                this.pool
+            );
+            leaderBot.leaderIndex = idx;
+            this.leaders.push(leaderBot);
+            logInfo('Leaders', `主号 ${idx + 1}: ${leaderAccount.username}`);
+        });
+        
+        // 加载第一个配置
+        this.loadNextConfig();
+    }
+
+    loadNextConfig() {
+        // 清理上一个配置的小号
+        this.cleanupCurrentFollowers();
+        
+        if (this.currentConfigIndex >= this.farmConfigNames.length) {
+            logSection('所有配置处理完成');
+            const totalElapsed = this.startTime ? Math.round((Date.now() - this.startTime) / 1000 / 60) : 0;
+            logSuccess('Farming', `✅ 全部 ${this.farmConfigNames.length} 个配置处理完成，总耗时 ${totalElapsed} 分钟`);
+            logInfo('Farming', `   总创建房间: ${this.totalRoomsCreated} 个`);
+            return;
+        }
+        
+        const configName = this.farmConfigNames[this.currentConfigIndex];
+        this.currentConfigName = configName;
+        this.configStartTime = Date.now();
+        
+        logSection(`开始处理配置: ${configName} (${this.currentConfigIndex + 1}/${this.farmConfigNames.length})`);
+        
+        // 加载配置目录（新格式：目录下有 followers.txt 和 proxies.txt）
+        try {
+            const configDir = path.join(projectRoot, 'config', 'farm', configName);
+            
+            // 读取 followers.txt（格式：用户名,密码）
+            const followersPath = path.join(configDir, 'followers.txt');
+            const followersContent = fs.readFileSync(followersPath, 'utf8').replace(/^\uFEFF/, '');
+            const followers = followersContent
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line && line.includes(','))
+                .map(line => {
+                    const [username, password] = line.split(',');
+                    return { username: username.trim(), password: password.trim() };
+                });
+            
+            // 读取 proxies.txt（每行一个代理）
+            const proxiesPath = path.join(configDir, 'proxies.txt');
+            let proxies = [];
+            if (fs.existsSync(proxiesPath)) {
+                const proxiesContent = fs.readFileSync(proxiesPath, 'utf8').replace(/^\uFEFF/, '');
+                proxies = proxiesContent
+                    .split('\n')
+                    .map(line => line.trim())
+                    .filter(line => line.length > 0);
+            }
+            
+            this.currentConfig = { followers, proxies };
+            this.currentProxies = proxies;
+            
+            logInfo(configName, `小号数量: ${followers.length} 个`);
+            logInfo(configName, `代理数量: ${proxies.length} 个`);
+        } catch (e) {
+            logError('System', `加载配置失败: ${configName} - ${e.message}`);
+            this.currentConfigIndex++;
+            setTimeout(() => this.loadNextConfig(), 1000);
+            return;
+        }
+        
+        // 更新主号代理并启动/重连
+        this.updateLeadersForNewConfig();
+        
+        // 创建当前配置的小号Bot
+        this.createFollowerBots(this.currentConfig.followers || []);
+        
+        // 开始登录小号
+        this.startSequentialLogin();
+        
+        // 启动完成检查定时器
+        this.startCompleteCheck();
+    }
+
+    updateLeadersForNewConfig() {
+        logInfo('Leaders', `更新主号代理 (使用 ${this.currentConfigName} 的代理)...`);
+        
+        this.leaders.forEach((leader, idx) => {
+            const proxy = this.currentProxies[idx] || null;
+            const proxyDisplay = proxy ? proxy.replace(/:[^:@]+@/, ':***@') : '无';
+            
+            if (leader.state === 'OFFLINE' || !leader.is_gc_connected) {
+                // 首次启动
+                leader.proxy = proxy;
+                logInfo('Leaders', `   主号 ${idx + 1} (${leader.account.username}) 代理: ${proxyDisplay}`);
+                leader.start();
+            } else {
+                // 已在运行，需要重连换代理
+                logInfo('Leaders', `   主号 ${idx + 1} (${leader.account.username}) 换代理重连: ${proxyDisplay}`);
+                leader.reconnectWithNewProxy(proxy);
             }
         });
+    }
 
-        logInfo('Farming', `代理数量: ${this.proxies.length} 个`);
-        logInfo('Farming', `小号数量: ${allFollowerAccounts.length} 个`);
-        logInfo('Farming', `登录间隔: ${this.loginInterval}ms`);
-
-        // 创建所有小号Bot（但不立即登录）
-        allFollowerAccounts.forEach(acc => {
-            const bot = new FollowerBot(acc, this.settings, this.proxies, this.pool);
-            this.allFollowers.push(bot);
+    createFollowerBots(followers) {
+        this.currentFollowers = [];
+        this.pool.idle = [];
+        this.pool.assigned.clear();
+        this.pool.failed = [];
+        this.pool.all = [];
+        
+        followers.forEach(acc => {
+            const bot = new FollowerBot(acc, this.settings, this.currentProxies, this.pool);
+            this.currentFollowers.push(bot);
             this.pool.all.push(bot);
         });
+        
+        logInfo(this.currentConfigName, `创建 ${this.currentFollowers.length} 个小号Bot`);
+    }
 
-        // 启动主号
-        this.fleets.forEach(fleet => {
-            if (fleet.leader) {
-                const leaderBot = new LeaderBot(
-                    fleet.leader,
-                    this.settings,
-                    fleet.leader.proxy || (this.proxies.length > 0 ? this.proxies[0] : null),
-                    this.pool
-                );
-                this.leaders.push(leaderBot);
-                
-                logInfo('Farming', `主号: ${fleet.leader.username}`);
-                leaderBot.start();
-            }
-        });
-
-        // 依次登录小号（间隔0.1秒）
-        this.startSequentialLogin();
+    cleanupCurrentFollowers() {
+        // 不清理小号，让已登录的继续留着，只切换到新配置
+        if (this.currentFollowers.length > 0) {
+            logInfo('Farming', `切换配置，${this.currentFollowers.length} 个小号保持运行`);
+            this.currentFollowers = [];
+        }
+        
+        // 清空池子引用（新配置会创建新的）
+        this.pool.idle = [];
+        this.pool.failed = [];
+        this.pool.assigned.clear();
+        
+        // 停止重试定时器
+        if (this.retryTimer) {
+            clearTimeout(this.retryTimer);
+            this.retryTimer = null;
+        }
     }
 
     startSequentialLogin() {
-        logSection('小号依次登录开始');
+        logInfo(this.currentConfigName, '📦 开始依次登录小号...');
         
         let index = 0;
-        const total = this.allFollowers.length;
+        const total = this.currentFollowers.length;
         
         const loginNext = () => {
             if (index >= total) {
-                logSuccess('Farming', `全部 ${total} 个小号已启动登录`);
+                logSuccess(this.currentConfigName, `全部 ${total} 个小号已启动登录`);
                 // 启动失败重试轮询
-                setTimeout(() => this.retryFailedLogins(), this.retryInterval);
+                this.retryTimer = setTimeout(() => this.retryFailedLogins(), this.retryInterval);
                 return;
             }
 
-            const bot = this.allFollowers[index];
+            const bot = this.currentFollowers[index];
             if (bot.state === FollowerState.PENDING) {
                 bot.start();
             }
@@ -1231,7 +1402,7 @@ class FarmingManager {
             
             // 每100个打印一次进度
             if (index % 100 === 0) {
-                logInfo('Farming', `📦 登录进度: ${index}/${total}`);
+                logInfo(this.currentConfigName, `📦 登录进度: ${index}/${total}`);
             }
             
             // 下一个
@@ -1248,7 +1419,7 @@ class FarmingManager {
         );
         
         if (failed.length > 0) {
-            logInfo('Farming', `🔄 发现 ${failed.length} 个失败小号，开始重试...`);
+            logInfo(this.currentConfigName, `🔄 发现 ${failed.length} 个失败小号，开始重试...`);
             
             // 从失败列表移除
             this.pool.failed = this.pool.failed.filter(f => 
@@ -1264,7 +1435,77 @@ class FarmingManager {
         }
 
         // 继续定期检查
-        setTimeout(() => this.retryFailedLogins(), this.retryInterval);
+        this.retryTimer = setTimeout(() => this.retryFailedLogins(), this.retryInterval);
+    }
+
+    startCompleteCheck() {
+        // 停止之前的检查
+        if (this.completeCheckTimer) {
+            clearInterval(this.completeCheckTimer);
+        }
+        
+        // 每5秒检查一次是否完成
+        this.completeCheckTimer = setInterval(() => {
+            this.checkConfigComplete();
+        }, 5000);
+    }
+
+    checkConfigComplete() {
+        const poolStats = this.pool.getStats();
+        
+        // 完成条件：池子空了且没有正在加入的小号
+        // 即所有小号都已进入房间
+        if (poolStats.idle === 0 && poolStats.assigned === 0 && poolStats.inLobby > 0) {
+            // 记录统计
+            const elapsed = this.configStartTime ? Math.round((Date.now() - this.configStartTime) / 1000 / 60) : 0;
+            let configRooms = 0;
+            this.leaders.forEach(l => configRooms += l.roomsCreated || 0);
+            
+            this.configStats[this.currentConfigName] = {
+                followers: poolStats.inLobby,
+                rooms: configRooms - this.totalRoomsCreated,
+                elapsed
+            };
+            this.totalRoomsCreated = configRooms;
+            
+            logSuccess(this.currentConfigName, `✅ 配置处理完成！`);
+            logInfo(this.currentConfigName, `   小号: ${poolStats.inLobby} 个已进入房间`);
+            logInfo(this.currentConfigName, `   耗时: ${elapsed} 分钟`);
+            
+            // 停止检查定时器
+            if (this.completeCheckTimer) {
+                clearInterval(this.completeCheckTimer);
+                this.completeCheckTimer = null;
+            }
+            
+            // 切换到下一个配置
+            this.currentConfigIndex++;
+            setTimeout(() => this.loadNextConfig(), 2000);
+        }
+    }
+
+    skipCurrentConfig() {
+        logWarning('Farming', `⏭️ 跳过当前配置: ${this.currentConfigName}`);
+        
+        const poolStats = this.pool.getStats();
+        const elapsed = this.configStartTime ? Math.round((Date.now() - this.configStartTime) / 1000 / 60) : 0;
+        
+        this.configStats[this.currentConfigName] = {
+            followers: poolStats.inLobby,
+            rooms: 0,
+            elapsed,
+            skipped: true
+        };
+        
+        // 停止检查定时器
+        if (this.completeCheckTimer) {
+            clearInterval(this.completeCheckTimer);
+            this.completeCheckTimer = null;
+        }
+        
+        // 切换到下一个配置
+        this.currentConfigIndex++;
+        setTimeout(() => this.loadNextConfig(), 1000);
     }
 
     getStats() {
@@ -1277,14 +1518,27 @@ class FarmingManager {
             roomsCreated += leader.roomsCreated || 0;
         });
 
+        const totalElapsed = this.startTime ? Math.round((Date.now() - this.startTime) / 1000) : 0;
+        const configElapsed = this.configStartTime ? Math.round((Date.now() - this.configStartTime) / 1000) : 0;
+
         return {
-            roomsCreated,           // 已创建房间数
-            leadersActive,          // 活跃主号数
-            poolIdle: poolStats.idle,    // 池子中待分配
-            assigned: poolStats.assigned, // 已分配正在加入
-            inLobby: poolStats.inLobby,   // 已在房间内
-            failed: poolStats.failed,     // 失败待重试
-            total: poolStats.total        // 总数
+            // 当前配置进度
+            currentConfig: this.currentConfigName,
+            currentConfigIndex: this.currentConfigIndex,
+            totalConfigs: this.farmConfigNames.length,
+            configProgress: poolStats.inLobby,
+            configTotal: poolStats.total,
+            configElapsed,           // 当前配置运行秒数
+            
+            // 总体进度
+            roomsCreated,            // 已创建房间数
+            leadersActive,           // 活跃主号数
+            poolIdle: poolStats.idle,
+            assigned: poolStats.assigned,
+            inLobby: poolStats.inLobby,
+            failed: poolStats.failed,
+            total: poolStats.total,
+            totalElapsed             // 总运行秒数
         };
     }
 
@@ -1300,7 +1554,7 @@ class FarmingManager {
         
         // 统计当前小号在各房间的分布
         const roomStats = {};
-        this.allFollowers.forEach(follower => {
+        this.currentFollowers.forEach(follower => {
             const lobbyId = follower.currentLobbyId?.toString();
             if (lobbyId) {
                 roomStats[lobbyId] = (roomStats[lobbyId] || 0) + 1;
@@ -1317,7 +1571,7 @@ class FarmingManager {
         });
         
         // 遍历所有小号，检查是否在要解散的房间中
-        this.allFollowers.forEach(follower => {
+        this.currentFollowers.forEach(follower => {
             const followerLobbyId = follower.currentLobbyId?.toString();
             
             if (followerLobbyId && roomIdSet.has(followerLobbyId)) {
@@ -1335,43 +1589,49 @@ class FarmingManager {
     cleanup() {
         logInfo('Farming', '🧹 清理资源...');
         
+        // 停止定时器
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+        if (this.completeCheckTimer) clearInterval(this.completeCheckTimer);
+        
         this.leaders.forEach(bot => bot.cleanup());
-        this.allFollowers.forEach(bot => bot.cleanup());
+        this.currentFollowers.forEach(bot => bot.cleanup());
         
         logSuccess('Farming', '挂机车队已停止');
     }
 }
 
 // ============================================
-// 代理加载
+// 扫描 farm 配置目录（新格式：每个配置是一个目录）
 // ============================================
-function loadProxies(proxiesFile) {
-    let proxies = [];
+function scanFarmConfigs() {
+    const farmDir = path.join(projectRoot, 'config', 'farm');
+    const configs = [];
+    
     try {
-        const proxiesPath = path.resolve(projectRoot, proxiesFile);
-        if (fs.existsSync(proxiesPath)) {
-            const content = fs.readFileSync(proxiesPath, 'utf8');
-            proxies = content.split('\n')
-                .map(line => line.trim())
-                .filter(line => line.length > 0)
-                .map(line => {
-                    if (line.startsWith('http://') || line.startsWith('https://')) {
-                        return line;
-                    }
-                    const parts = line.split(':');
-                    if (parts.length === 4) {
-                        const [ip, port, user, pass] = parts;
-                        return `http://${user}:${pass}@${ip}:${port}`;
-                    }
-                    return null;
-                })
-                .filter(p => p !== null);
-            logInfo('System', `📡 加载了 ${proxies.length} 个代理`);
+        if (!fs.existsSync(farmDir)) {
+            fs.mkdirSync(farmDir, { recursive: true });
+            logWarning('System', `创建 farm 配置目录: ${farmDir}`);
+            return configs;
         }
+        
+        const items = fs.readdirSync(farmDir, { withFileTypes: true });
+        items
+            .filter(item => item.isDirectory() && item.name.startsWith('config_'))
+            .sort((a, b) => a.name.localeCompare(b.name)) // 按目录名排序 config_000, config_001, ...
+            .forEach(item => {
+                // 验证目录内有 followers.txt
+                const followersPath = path.join(farmDir, item.name, 'followers.txt');
+                if (fs.existsSync(followersPath)) {
+                    configs.push(item.name);
+                }
+            });
+        
+        logInfo('System', `📂 扫描到 ${configs.length} 个 farm 配置`);
     } catch (e) {
-        logError('System', `读取代理文件失败: ${e.message}`);
+        logError('System', `扫描 farm 配置目录失败: ${e.message}`);
     }
-    return proxies;
+    
+    return configs;
 }
 
 // ============================================
@@ -1380,68 +1640,55 @@ function loadProxies(proxiesFile) {
 const args = process.argv.slice(2);
 const isDebugMode = args.includes('debug');
 
-// 解析配置文件路径
-let configPath = path.join(projectRoot, 'config', 'config_farming.json');
-const configArg = args.find(arg => arg.startsWith('--config='));
-if (configArg) {
-    const customPath = configArg.split('=')[1];
-    configPath = path.resolve(projectRoot, customPath);
-}
-
-let config;
+// 加载主号配置 (config_leaders.json)
+const leadersConfigPath = path.join(projectRoot, 'config', 'config_leaders.json');
+let leadersConfig;
 try {
-    const rawContent = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
-    config = JSON.parse(rawContent);
-    logInfo('System', `📄 配置文件: ${configPath}`);
+    const rawContent = fs.readFileSync(leadersConfigPath, 'utf8').replace(/^\uFEFF/, '');
+    leadersConfig = JSON.parse(rawContent);
+    logInfo('System', `📄 主号配置: ${leadersConfigPath}`);
+    logInfo('System', `   主号数量: ${(leadersConfig.leaders || []).length} 个`);
 } catch (e) {
-    logError('System', `读取配置失败: ${e.message}`);
+    logError('System', `读取主号配置失败: ${e.message}`);
     process.exit(1);
 }
 
-config.global_settings.debug_mode = isDebugMode;
+leadersConfig.global_settings.debug_mode = isDebugMode;
 
 // 确保共享验证数据目录存在
-const sharedDataPath = config.global_settings.shared_steam_data_path || "../shared_steam_data";
+const sharedDataPath = leadersConfig.global_settings.shared_steam_data_path || "../shared_steam_data";
 const steamDataDir = path.resolve(projectRoot, sharedDataPath);
 if (!fs.existsSync(steamDataDir)) {
     fs.mkdirSync(steamDataDir, { recursive: true });
 }
 
-// 加载代理
-let proxies = [];
-if (config.fleets && config.fleets[0] && config.fleets[0].proxies) {
-    proxies = config.fleets[0].proxies;
-    logInfo('System', `📡 从配置加载 ${proxies.length} 个代理`);
-} else if (config.proxies_file) {
-    proxies = loadProxies(config.proxies_file);
+// 扫描 farm 配置
+const farmConfigNames = scanFarmConfigs();
+
+if (farmConfigNames.length === 0) {
+    logError('System', '没有找到任何 farm 配置！请在 config/farm/ 目录下创建 config_XXX 目录，并添加 followers.txt');
+    process.exit(1);
 }
 
-if (proxies.length === 0) {
-    logWarning('System', '未配置代理，将使用本地IP');
-}
-
-logSection('Dota2 挂机车队 v2.0');
-logInfo('System', `模式: ${isDebugMode ? '调试模式' : '生产模式'}`);
-logInfo('System', `游戏ID: ${config.global_settings.custom_game_id}`);
-logInfo('System', `房间密码: ${config.global_settings.lobby_password}`);
-logInfo('System', `Seeding阈值: ${config.global_settings.seeding_threshold || 5} 人`);
-logInfo('System', `每房间最大人数: ${config.global_settings.max_players_per_room || 24} 人 (小号: ${(config.global_settings.max_players_per_room || 24) - 2})`);
-
-// 验证配置
-if (!config.fleets || config.fleets.length === 0) {
-    logError('System', '没有配置任何车队！');
+// 验证主号配置
+if (!leadersConfig.leaders || leadersConfig.leaders.length === 0) {
+    logError('System', '没有配置任何主号！请检查 config_leaders.json');
     process.exit(1);
 }
 
 // 创建并启动管理器
-const manager = new FarmingManager(config, proxies);
+const manager = new FarmingManager(leadersConfig, farmConfigNames);
 manager.start();
 
 // 状态监控（每30秒输出一次）
 setInterval(() => {
     const stats = manager.getStats();
     const percentage = stats.total > 0 ? Math.round((stats.inLobby / stats.total) * 100) : 0;
-    logInfo('Stats', `房间: ${stats.roomsCreated} | 主号: ${stats.leadersActive} | 小号: ${stats.inLobby}/${stats.total} (${percentage}%) | 池子: ${stats.poolIdle} | 加入中: ${stats.assigned} | 失败: ${stats.failed}`);
+    const configElapsedMin = Math.floor(stats.configElapsed / 60);
+    const configElapsedSec = stats.configElapsed % 60;
+    const totalElapsedMin = Math.floor(stats.totalElapsed / 60);
+    
+    logInfo('Stats', `[${stats.currentConfig || '-'}] 进度: ${stats.inLobby}/${stats.total} (${percentage}%) | 房间: ${stats.roomsCreated} | 配置: ${stats.currentConfigIndex + 1}/${stats.totalConfigs} | 运行: ${configElapsedMin}分${configElapsedSec}秒`);
 }, 30000);
 
 // 异常处理
@@ -1472,6 +1719,8 @@ process.stdin.on('data', (data) => {
     // 尝试解析 JSON 命令
     try {
         const cmd = JSON.parse(input);
+        
+        // 解散房间命令
         if (cmd.type === 'dissolve_rooms' && cmd.roomIds) {
             logSection('收到解散房间命令');
             logInfo('System', `需要解散的房间: ${cmd.roomIds.length} 个`);
@@ -1479,6 +1728,20 @@ process.stdin.on('data', (data) => {
                 logInfo('System', `   ${idx + 1}. LobbyId: ${id}`);
             });
             manager.dissolveRooms(cmd.roomIds);
+            return;
+        }
+        
+        // 跳过当前配置命令
+        if (cmd.type === 'skip_config') {
+            logSection('收到跳过配置命令');
+            manager.skipCurrentConfig();
+            return;
+        }
+        
+        // 获取状态命令
+        if (cmd.type === 'get_stats') {
+            const stats = manager.getStats();
+            console.log(JSON.stringify({ type: 'stats', data: stats }));
             return;
         }
     } catch (e) {
@@ -1494,5 +1757,11 @@ process.stdin.on('data', (data) => {
             logSuccess('System', '程序已安全退出');
             process.exit(0);
         }, 3000);
+    }
+    
+    // 跳过命令
+    if (cmdLower === 'skip') {
+        logSection('收到跳过命令');
+        manager.skipCurrentConfig();
     }
 });

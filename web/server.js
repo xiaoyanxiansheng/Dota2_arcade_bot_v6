@@ -226,11 +226,11 @@ app.post('/api/dissolve_rooms', (req, res) => {
 
 // 读取配置
 app.get('/api/config/:type', (req, res) => {
-    const type = req.params.type; // showcase | farming
+    const type = req.params.type; // showcase | leaders
     let configPath;
     
     if (type === 'showcase') configPath = path.join(PROJECT_ROOT, 'config', 'config_showcase.json');
-    else if (type === 'farming') configPath = path.join(PROJECT_ROOT, 'config', 'config_farming.json');
+    else if (type === 'leaders') configPath = path.join(PROJECT_ROOT, 'config', 'config_leaders.json');
     else return res.status(400).json({ error: 'Invalid config type' });
 
     try {
@@ -252,12 +252,150 @@ app.post('/api/config/:type', (req, res) => {
     let configPath;
     
     if (type === 'showcase') configPath = path.join(PROJECT_ROOT, 'config', 'config_showcase.json');
-    else if (type === 'farming') configPath = path.join(PROJECT_ROOT, 'config', 'config_farming.json');
+    else if (type === 'leaders') configPath = path.join(PROJECT_ROOT, 'config', 'config_leaders.json');
     else return res.status(400).json({ error: 'Invalid config type' });
 
     try {
         fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2), 'utf8');
         broadcastLog('System', `配置已更新: ${type}`, 'success');
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ============================================
+// Farm 配置管理 API
+// ============================================
+
+// 获取所有 farm 配置列表（新格式：目录结构）
+app.get('/api/farm/configs', (req, res) => {
+    try {
+        const farmDir = path.join(PROJECT_ROOT, 'config', 'farm');
+        
+        // 确保目录存在
+        if (!fs.existsSync(farmDir)) {
+            fs.mkdirSync(farmDir, { recursive: true });
+            return res.json({ configs: [] });
+        }
+        
+        const items = fs.readdirSync(farmDir, { withFileTypes: true });
+        const configs = items
+            .filter(item => item.isDirectory() && item.name.startsWith('config_'))
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map(item => {
+                const name = item.name;
+                const configDir = path.join(farmDir, name);
+                const followersPath = path.join(configDir, 'followers.txt');
+                const proxiesPath = path.join(configDir, 'proxies.txt');
+                
+                let followers = 0, proxies = 0;
+                if (fs.existsSync(followersPath)) {
+                    const content = fs.readFileSync(followersPath, 'utf8');
+                    followers = content.split('\n').filter(line => line.trim() && line.includes(',')).length;
+                }
+                if (fs.existsSync(proxiesPath)) {
+                    const content = fs.readFileSync(proxiesPath, 'utf8');
+                    proxies = content.split('\n').filter(line => line.trim()).length;
+                }
+                
+                return { name, followers, proxies };
+            })
+            .filter(cfg => cfg.followers > 0); // 只返回有小号的配置
+        
+        res.json({ configs });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 读取单个 farm 配置（返回 followers.txt 和 proxies.txt 的内容）
+app.get('/api/farm/config/:name', (req, res) => {
+    try {
+        const name = req.params.name;
+        const configDir = path.join(PROJECT_ROOT, 'config', 'farm', name);
+        
+        if (!fs.existsSync(configDir)) {
+            return res.status(404).json({ error: 'Config not found' });
+        }
+        
+        const followersPath = path.join(configDir, 'followers.txt');
+        const proxiesPath = path.join(configDir, 'proxies.txt');
+        
+        const followers = fs.existsSync(followersPath) ? fs.readFileSync(followersPath, 'utf8') : '';
+        const proxies = fs.existsSync(proxiesPath) ? fs.readFileSync(proxiesPath, 'utf8') : '';
+        
+        res.json({ followers, proxies });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 保存单个 farm 配置（保存 followers.txt 和 proxies.txt）
+app.post('/api/farm/config/:name', (req, res) => {
+    try {
+        const name = req.params.name;
+        const configDir = path.join(PROJECT_ROOT, 'config', 'farm', name);
+        
+        // 确保目录存在
+        if (!fs.existsSync(configDir)) {
+            fs.mkdirSync(configDir, { recursive: true });
+        }
+        
+        const { followers, proxies } = req.body;
+        
+        if (followers !== undefined) {
+            fs.writeFileSync(path.join(configDir, 'followers.txt'), followers, 'utf8');
+        }
+        if (proxies !== undefined) {
+            fs.writeFileSync(path.join(configDir, 'proxies.txt'), proxies, 'utf8');
+        }
+        
+        broadcastLog('System', `Farm 配置已保存: ${name}`, 'success');
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 添加新的 farm 配置
+app.post('/api/farm/add', (req, res) => {
+    try {
+        const { name } = req.body;
+        
+        if (!name || !name.match(/^config_\d{3}$/)) {
+            return res.status(400).json({ error: '配置名称格式无效，应为 config_XXX (如 config_001)' });
+        }
+        
+        const configDir = path.join(PROJECT_ROOT, 'config', 'farm', name);
+        
+        // 检查是否已存在
+        if (fs.existsSync(configDir)) {
+            return res.status(409).json({ error: '配置已存在' });
+        }
+        
+        // 创建目录和空文件
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.writeFileSync(path.join(configDir, 'followers.txt'), '# 格式：用户名,密码 (每行一个)\n', 'utf8');
+        fs.writeFileSync(path.join(configDir, 'proxies.txt'), '# 格式：http://user:pass@host:port (每行一个)\n', 'utf8');
+        
+        broadcastLog('System', `新建 Farm 配置: ${name}`, 'success');
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 跳过当前 farm 配置
+app.post('/api/farm/skip', (req, res) => {
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+    
+    try {
+        const command = JSON.stringify({ type: 'skip_config' }) + '\n';
+        processes.farming.process.stdin.write(command);
+        broadcastLog('System', '已发送跳过命令', 'info');
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -325,7 +463,9 @@ app.post('/api/process/:name/:action', (req, res) => {
         if (name === 'showcase') {
             args = ['src/showcase.js', '--config=config/config_showcase.json'];
         } else if (name === 'farming') {
-            args = ['src/farming.js', '--config=config/config_farming.json'];
+            // farming v3.0 不再需要 --config 参数
+            // 自动从 config_leaders.json 和 config/farm/ 目录加载
+            args = ['src/farming.js'];
         } else {
             return res.status(400).json({ error: 'Unknown process' });
         }

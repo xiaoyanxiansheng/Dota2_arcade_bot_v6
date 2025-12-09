@@ -27,6 +27,42 @@
         ::-webkit-scrollbar-track { background: #1e1e1e; }
         ::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #777; }
+        
+        /* 进度条动画 */
+        .progress-bar {
+            background: linear-gradient(
+                90deg,
+                rgba(34, 197, 94, 1) 0%,
+                rgba(74, 222, 128, 1) 50%,
+                rgba(34, 197, 94, 1) 100%
+            );
+            background-size: 200% 100%;
+            animation: shimmer 2s ease-in-out infinite;
+        }
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        
+        /* 进度条条纹效果 */
+        .progress-stripes {
+            background-image: linear-gradient(
+                45deg,
+                rgba(255,255,255,0.15) 25%,
+                transparent 25%,
+                transparent 50%,
+                rgba(255,255,255,0.15) 50%,
+                rgba(255,255,255,0.15) 75%,
+                transparent 75%,
+                transparent
+            );
+            background-size: 1rem 1rem;
+            animation: progress-stripes 1s linear infinite;
+        }
+        @keyframes progress-stripes {
+            from { background-position: 1rem 0; }
+            to { background-position: 0 0; }
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 h-screen flex flex-col overflow-hidden">
@@ -71,13 +107,31 @@
                         <button @click="toggleProcess('farming', 'start')" :disabled="status.farming" class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">启动</button>
                         <button @click="toggleProcess('farming', 'stop')" :disabled="!status.farming" class="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">停止</button>
                     </div>
-                    <div class="border-t border-gray-600 pt-2 mt-2">
-                        <label class="text-xs text-gray-400 block mb-1">大号验证</label>
-                        <select v-model="selectedFarmingLeader" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-1">
-                            <option value="">-- 选择账号 --</option>
-                            <option v-for="(leader, idx) in farmingLeaders" :key="idx" :value="leader.username">{{ leader.username }}</option>
-                        </select>
-                        <button @click="verifyLeader('farming', selectedFarmingLeader)" :disabled="!selectedFarmingLeader || toolStatus.running" class="w-full bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-xs py-1 rounded">验证</button>
+                    <!-- 进度显示：仅运行时显示 -->
+                    <div v-if="status.farming && farmingProgress" class="border-t border-gray-600 pt-2 mt-2">
+                        <!-- 当前配置名称 -->
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs text-blue-400 font-bold">📦 {{ farmingProgress.currentConfig || '-' }}</span>
+                            <span class="text-xs text-gray-400">配置 {{ farmingProgress.currentConfigIndex + 1 }}/{{ farmingProgress.totalConfigs }}</span>
+                        </div>
+                        
+                        <!-- 进度条 -->
+                        <div class="relative h-6 bg-gray-600 rounded-full overflow-hidden mb-2 shadow-inner">
+                            <div class="absolute inset-0 progress-bar progress-stripes transition-all duration-500 ease-out rounded-full" 
+                                 :style="{ width: farmingProgress.percent + '%' }"></div>
+                            <div class="absolute inset-0 flex items-center justify-center text-xs font-bold text-white" style="text-shadow: 0 1px 2px rgba(0,0,0,0.5);">
+                                {{ farmingProgress.configProgress }}/{{ farmingProgress.configTotal }} ({{ farmingProgress.percent }}%)
+                            </div>
+                        </div>
+                        
+                        <!-- 详细信息 -->
+                        <div class="grid grid-cols-2 gap-1 text-xs">
+                            <div class="flex justify-between text-gray-400"><span>🚪 房间:</span><span class="text-white">{{ farmingProgress.configRooms || 0 }}</span></div>
+                            <div class="flex justify-between text-gray-400"><span>⏱️ 时长:</span><span class="text-yellow-400 font-bold">{{ formatElapsed(farmingProgress.configElapsed) }}</span></div>
+                        </div>
+                        
+                        <!-- 跳过按钮 -->
+                        <button @click="skipFarmingConfig" class="w-full bg-yellow-600 hover:bg-yellow-700 text-xs py-1.5 rounded mt-2 font-medium">⏭️ 跳过当前配置</button>
                     </div>
                 </div>
 
@@ -132,7 +186,8 @@
                     </div>
                 </div>
                 <button @click="loadConfig('showcase')" :class="currentTab === 'config_showcase' ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'" class="px-4 py-3 border-b-2 font-medium text-sm transition">展示配置</button>
-                <button @click="loadConfig('farming')" :class="currentTab === 'config_farming' ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'" class="px-4 py-3 border-b-2 font-medium text-sm transition">挂机配置</button>
+                <button @click="loadConfig('leaders')" :class="currentTab === 'config_leaders' ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'" class="px-4 py-3 border-b-2 font-medium text-sm transition">主号配置</button>
+                <button @click="showFarmConfigs()" :class="currentTab === 'farm_configs' ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'" class="px-4 py-3 border-b-2 font-medium text-sm transition">Farm配置</button>
             </div>
 
             <!-- 内容区域 -->
@@ -145,11 +200,14 @@
                         <button @click="clearCurrentLogs" class="text-xs text-gray-500 hover:text-white">清空日志</button>
                     </div>
                     
-                    <!-- Stats 固定显示区（仅挂机日志） -->
-                    <div v-if="currentTab === 'log_farming' && farmingStats" class="bg-gray-800 border border-blue-500/50 rounded p-3 mb-2 text-sm">
-                        <div class="flex items-center">
-                            <span class="text-blue-400 font-bold mr-2">📊 实时状态</span>
-                            <span class="text-gray-300">{{ farmingStats }}</span>
+                    <!-- Stats 固定显示区（仅挂机日志） - 总体统计 -->
+                    <div v-if="currentTab === 'log_farming' && farmingProgress" class="bg-gray-800 border border-blue-500/50 rounded p-3 mb-2 text-sm">
+                        <div class="flex items-center flex-wrap gap-x-4 gap-y-1">
+                            <span class="text-blue-400 font-bold">📊 总体统计</span>
+                            <span class="text-gray-300">配置: <span class="text-white">{{ farmingProgress.currentConfigIndex + 1 }}/{{ farmingProgress.totalConfigs }}</span></span>
+                            <span class="text-gray-300">总进度: <span class="text-green-400 font-bold">{{ farmingTotalInLobby + farmingProgress.configProgress }}/{{ farmingTotalFollowers }} ({{ Math.round((farmingTotalInLobby + farmingProgress.configProgress) / farmingTotalFollowers * 100) || 0 }}%)</span></span>
+                            <span class="text-gray-300">总房间: <span class="text-white">{{ farmingProgress.roomsCreated }}</span></span>
+                            <span class="text-gray-300">总时长: <span class="text-yellow-400 font-bold">{{ formatElapsed(farmingTotalElapsed) }}</span></span>
                         </div>
                     </div>
                     
@@ -162,11 +220,11 @@
                     </div>
                 </div>
 
-                <!-- 配置 Tab -->
-                <div v-show="currentTab.startsWith('config')" class="h-full flex flex-col p-4">
+                <!-- JSON 配置 Tab (showcase/leaders) -->
+                <div v-show="currentTab === 'config_showcase' || currentTab === 'config_leaders'" class="h-full flex flex-col p-4">
                     <div class="flex justify-between items-center mb-2">
                         <h2 class="text-sm font-semibold text-gray-400">
-                            {{ currentTab === 'config_showcase' ? 'config_showcase.json' : 'config_farming.json' }}
+                            {{ currentTab === 'config_showcase' ? 'config_showcase.json' : 'config_leaders.json' }}
                         </h2>
                         <div class="space-x-2">
                             <span v-if="saveMessage" class="text-xs text-green-500">{{ saveMessage }}</span>
@@ -174,6 +232,73 @@
                         </div>
                     </div>
                     <textarea v-model="configContent" class="flex-1 bg-gray-800 border border-gray-700 rounded p-4 font-mono text-sm resize-none focus:outline-none focus:border-blue-500"></textarea>
+                </div>
+                
+                <!-- Farm 配置编辑 Tab (文本格式) -->
+                <div v-show="currentTab === 'config_farm'" class="h-full flex flex-col p-4">
+                    <div class="flex justify-between items-center mb-2">
+                        <h2 class="text-sm font-semibold text-gray-400">
+                            📦 {{ editingFarmConfig }} <span class="text-gray-500 text-xs">（格式：用户名,密码）</span>
+                        </h2>
+                        <div class="space-x-2">
+                            <button @click="showFarmConfigs()" class="bg-gray-600 hover:bg-gray-500 text-white text-xs px-3 py-1 rounded">← 返回列表</button>
+                            <span v-if="saveMessage" class="text-xs text-green-500">{{ saveMessage }}</span>
+                            <button @click="saveFarmConfig()" class="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded">保存修改</button>
+                        </div>
+                    </div>
+                    <div class="flex-1 flex gap-4 min-h-0">
+                        <!-- 小号列表 -->
+                        <div class="flex-1 flex flex-col">
+                            <label class="text-xs text-gray-400 mb-1">🎮 小号列表 (followers.txt)</label>
+                            <textarea v-model="farmFollowersContent" placeholder="用户名,密码&#10;用户名,密码&#10;..." class="flex-1 bg-gray-800 border border-gray-700 rounded p-3 font-mono text-xs resize-none focus:outline-none focus:border-blue-500"></textarea>
+                        </div>
+                        <!-- 代理列表 -->
+                        <div class="w-1/3 flex flex-col">
+                            <label class="text-xs text-gray-400 mb-1">🌐 代理列表 (proxies.txt)</label>
+                            <textarea v-model="farmProxiesContent" placeholder="http://user:pass@host:port&#10;..." class="flex-1 bg-gray-800 border border-gray-700 rounded p-3 font-mono text-xs resize-none focus:outline-none focus:border-blue-500"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Farm 配置列表 Tab -->
+                <div v-show="currentTab === 'farm_configs'" class="h-full flex flex-col p-4">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-semibold text-white">📁 Farm 配置列表</h2>
+                        <div class="flex space-x-2">
+                            <button @click="refreshFarmConfigs" class="bg-gray-600 hover:bg-gray-500 text-white text-xs px-3 py-1 rounded">🔄 刷新</button>
+                            <button @click="addFarmConfig" class="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1 rounded">➕ 添加配置</button>
+                        </div>
+                    </div>
+                    <div class="flex-1 overflow-auto">
+                        <table class="w-full text-sm">
+                            <thead class="bg-gray-800 sticky top-0">
+                                <tr>
+                                    <th class="text-left px-4 py-2 text-gray-400">配置名</th>
+                                    <th class="text-right px-4 py-2 text-gray-400">小号数</th>
+                                    <th class="text-right px-4 py-2 text-gray-400">代理数</th>
+                                    <th class="text-center px-4 py-2 text-gray-400">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="cfg in farmConfigs" :key="cfg.name" class="border-b border-gray-700 hover:bg-gray-800/50">
+                                    <td class="px-4 py-3">
+                                        <span class="font-mono">{{ cfg.name }}</span>
+                                        <span v-if="farmingProgress && farmingProgress.currentConfig === cfg.name" class="ml-2 text-xs bg-green-600 px-1 rounded">运行中</span>
+                                    </td>
+                                    <td class="px-4 py-3 text-right text-gray-300">{{ cfg.followers }}</td>
+                                    <td class="px-4 py-3 text-right text-gray-300">{{ cfg.proxies }}</td>
+                                    <td class="px-4 py-3 text-center">
+                                        <button @click="editFarmConfig(cfg.name)" class="text-blue-400 hover:text-blue-300 text-xs">编辑</button>
+                                    </td>
+                                </tr>
+                                <tr v-if="farmConfigs.length === 0">
+                                    <td colspan="4" class="px-4 py-8 text-center text-gray-500">
+                                        暂无配置，点击「添加配置」创建
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
             </div>
@@ -211,12 +336,24 @@
                 const logs = ref([]);
                 const currentTab = ref('log_all');
                 const logContainer = ref(null);
-                const farmingStats = ref(null); // 挂机车队实时状态
+                const farmingStats = ref(null); // 挂机车队实时状态（总体）
+                const farmingProgress = ref(null); // 挂机车队进度信息
+                let farmingElapsedTimer = null;   // 时间更新定时器
+                let farmingTotalStartTime = null; // 总运行开始时间
+                const farmingTotalElapsed = ref(0); // 总运行时间（秒）
+                const farmingTotalInLobby = ref(0); // 总进入房间人数
+                const farmingTotalFollowers = ref(0); // 总小号数量（累计）
+                const processedConfigs = new Set(); // 已处理的配置（防止重复累加）
+                let configStartRooms = 0; // 当前配置开始时的总房间数
                 
                 // 配置编辑
                 const configContent = ref('');
                 const currentConfigType = ref(null);
                 const saveMessage = ref('');
+
+                // Farm 配置列表
+                const farmConfigs = ref([]);
+                const editingFarmConfig = ref(null);
 
                 // 工具参数
                 const searchGameId = ref('');
@@ -224,9 +361,7 @@
 
                 // 领队列表
                 const showcaseLeaders = ref([]);
-                const farmingLeaders = ref([]);
                 const selectedShowcaseLeader = ref('');
-                const selectedFarmingLeader = ref('');
 
                 // Steam Guard 验证码
                 const steamGuardVisible = ref(false);
@@ -318,8 +453,43 @@
                         scrollToBottom();
                         
                         // 提取挂机车队 Stats 信息
-                        if (log.source === 'farming' && log.message.includes('[Stats]')) {
-                            farmingStats.value = log.message.replace(/\[Stats\]\s*/, '').trim();
+                        // 日志格式: [时间][Stats] [config_000] 进度: 50/999 (5%) | 房间: 3 | 配置: 1/1 | 运行: 5分30秒
+                        if (log.source === 'farming' && log.message.includes('进度:') && log.message.includes('配置:')) {
+                            // 更宽松的正则，支持 config_XXX 或 - 作为配置名
+                            const match = log.message.match(/\[(config_\d+|-)\]\s*进度:\s*(\d+)\/(\d+)\s*\((\d+)%\)/);
+                            const roomMatch = log.message.match(/房间:\s*(\d+)/);
+                            const cfgMatch = log.message.match(/配置:\s*(\d+)\/(\d+)/);
+                            
+                            if (match && cfgMatch) {
+                                const newConfigName = match[1];
+                                const configChanged = farmingProgress.value?.currentConfig !== newConfigName;
+                                const currentInLobby = parseInt(match[2]);
+                                const currentTotal = parseInt(match[3]);
+                                const totalRooms = roomMatch ? parseInt(roomMatch[1]) : 0;
+                                
+                                // 配置切换时：累加上一个配置的进入人数，记录房间基准
+                                if (configChanged && farmingProgress.value) {
+                                    farmingTotalInLobby.value += farmingProgress.value.configProgress || 0;
+                                    configStartRooms = totalRooms; // 新配置开始时的房间数
+                                }
+                                
+                                // 计算当前配置的房间数
+                                const configRooms = totalRooms - configStartRooms;
+                                
+                                farmingProgress.value = {
+                                    currentConfig: newConfigName,
+                                    configProgress: currentInLobby,
+                                    configTotal: currentTotal,
+                                    percent: parseInt(match[4]),
+                                    roomsCreated: totalRooms,      // 总房间数（顶部统计用）
+                                    configRooms: configRooms,      // 当前配置房间数（侧边栏用）
+                                    currentConfigIndex: parseInt(cfgMatch[1]) - 1,
+                                    totalConfigs: parseInt(cfgMatch[2]),
+                                    // 配置变化时重置开始时间，否则保留
+                                    configStartTime: configChanged ? Date.now() : (farmingProgress.value?.configStartTime || Date.now()),
+                                    configElapsed: configChanged ? 0 : (farmingProgress.value?.configElapsed || 0)
+                                };
+                            }
                         }
                         
                         // 车队停止/清理完成时，清空 Stats
@@ -327,14 +497,50 @@
                             log.message.includes('进程已完全停止') ||
                             log.message.includes('farming 进程已退出')) {
                             farmingStats.value = null;
+                            farmingProgress.value = null;
                         }
                     });
 
                     socket.on('status', (newStatus) => {
                         status.value = { ...status.value, ...newStatus };
-                        // 挂机车队停止时，清空 Stats
+                        
+                        // 挂机车队启动时，启动时间更新定时器
+                        if (newStatus.farming === true && !farmingElapsedTimer) {
+                            farmingTotalStartTime = Date.now();
+                            farmingTotalElapsed.value = 0;
+                            farmingTotalInLobby.value = 0;
+                            farmingTotalFollowers.value = 0;
+                            processedConfigs.clear();
+                            configStartRooms = 0;
+                            
+                            // 启动时获取所有配置的总小号数
+                            fetch('/api/farm/configs').then(r => r.json()).then(data => {
+                                if (data.configs && data.configs.length > 0) {
+                                    farmingTotalFollowers.value = data.configs.reduce((sum, cfg) => sum + (cfg.followers || 0), 0);
+                                }
+                            }).catch(() => {});
+                            
+                            farmingElapsedTimer = setInterval(() => {
+                                // 更新当前配置时间
+                                if (farmingProgress.value && farmingProgress.value.configStartTime) {
+                                    farmingProgress.value.configElapsed = Math.floor((Date.now() - farmingProgress.value.configStartTime) / 1000);
+                                }
+                                // 更新总运行时间
+                                if (farmingTotalStartTime) {
+                                    farmingTotalElapsed.value = Math.floor((Date.now() - farmingTotalStartTime) / 1000);
+                                }
+                            }, 1000);
+                        }
+                        
+                        // 挂机车队停止时，清空 Stats 和定时器
                         if (newStatus.farming === false) {
                             farmingStats.value = null;
+                            farmingProgress.value = null;
+                            farmingTotalStartTime = null;
+                            if (farmingElapsedTimer) {
+                                clearInterval(farmingElapsedTimer);
+                                farmingElapsedTimer = null;
+                            }
                         }
                     });
                     
@@ -408,11 +614,6 @@
                         if (showcaseData.global_settings && showcaseData.global_settings.custom_game_id) {
                             queryGameId.value = showcaseData.global_settings.custom_game_id;
                         }
-
-                        // 加载挂机车队领队
-                        const farmingRes = await fetch('/api/config/farming');
-                        const farmingData = await farmingRes.json();
-                        farmingLeaders.value = (farmingData.fleets || []).map(f => f.leader).filter(l => l);
                     } catch (e) {
                         console.error('加载领队列表失败', e);
                     }
@@ -420,8 +621,7 @@
 
                 const verifyLeader = async (type, username) => {
                     if (!username) return;
-                    // 切换到对应车队的日志页签
-                    currentTab.value = type === 'showcase' ? 'log_showcase' : 'log_farming';
+                    currentTab.value = 'log_showcase';
                     try {
                         const res = await fetch(`/api/tool/login_leader`, {
                             method: 'POST',
@@ -435,6 +635,119 @@
                     } catch (e) {
                         alert('请求失败');
                     }
+                };
+
+                // Farm 配置相关方法
+                const refreshFarmConfigs = async () => {
+                    try {
+                        const res = await fetch('/api/farm/configs');
+                        const data = await res.json();
+                        farmConfigs.value = data.configs || [];
+                    } catch (e) {
+                        console.error('加载 Farm 配置失败', e);
+                    }
+                };
+
+                const showFarmConfigs = () => {
+                    currentTab.value = 'farm_configs';
+                    refreshFarmConfigs();
+                };
+
+                const addFarmConfig = async () => {
+                    // 自动生成下一个配置名
+                    const existingNums = farmConfigs.value.map(c => {
+                        const match = c.name.match(/config_(\d+)/);
+                        return match ? parseInt(match[1]) : -1;
+                    });
+                    const nextNum = existingNums.length > 0 ? Math.max(...existingNums) + 1 : 0;
+                    const newName = `config_${String(nextNum).padStart(3, '0')}`;
+                    
+                    if (!confirm(`创建新配置: ${newName}？`)) return;
+                    
+                    try {
+                        const res = await fetch('/api/farm/add', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: newName })
+                        });
+                        if (res.ok) {
+                            refreshFarmConfigs();
+                            editFarmConfig(newName);
+                        } else {
+                            const err = await res.json();
+                            alert('创建失败: ' + err.error);
+                        }
+                    } catch (e) {
+                        alert('请求失败');
+                    }
+                };
+
+                // Farm 配置编辑（新格式：文本）
+                const farmFollowersContent = ref('');
+                const farmProxiesContent = ref('');
+                
+                const editFarmConfig = async (name) => {
+                    currentTab.value = 'config_farm';
+                    currentConfigType.value = `farm/${name}`;
+                    editingFarmConfig.value = name;
+                    saveMessage.value = '';
+                    try {
+                        const res = await fetch(`/api/farm/config/${name}`);
+                        const data = await res.json();
+                        farmFollowersContent.value = data.followers || '';
+                        farmProxiesContent.value = data.proxies || '';
+                    } catch (e) {
+                        farmFollowersContent.value = '// 加载失败';
+                        farmProxiesContent.value = '';
+                    }
+                };
+                
+                const saveFarmConfig = async () => {
+                    if (!editingFarmConfig.value) return;
+                    try {
+                        const res = await fetch(`/api/farm/config/${editingFarmConfig.value}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                followers: farmFollowersContent.value,
+                                proxies: farmProxiesContent.value
+                            })
+                        });
+                        
+                        if (res.ok) {
+                            saveMessage.value = '保存成功!';
+                            setTimeout(() => saveMessage.value = '', 3000);
+                        } else {
+                            alert('保存失败');
+                        }
+                    } catch (e) {
+                        alert('请求失败');
+                    }
+                };
+
+                // 跳过当前配置
+                const skipFarmingConfig = async () => {
+                    if (!confirm('确定跳过当前配置？')) return;
+                    try {
+                        const res = await fetch('/api/farm/skip', { method: 'POST' });
+                        if (!res.ok) {
+                            const err = await res.json();
+                            alert('操作失败: ' + err.error);
+                        }
+                    } catch (e) {
+                        alert('请求失败');
+                    }
+                };
+
+                // 格式化运行时间
+                const formatElapsed = (seconds) => {
+                    if (!seconds) return '0秒';
+                    const h = Math.floor(seconds / 3600);
+                    const m = Math.floor((seconds % 3600) / 60);
+                    const s = seconds % 60;
+                    if (h > 0) return `${h}时${m}分`;
+                    if (m > 0) return `${m}分${s}秒`;
+                    return `${s}秒`;
                 };
 
                 const submitSteamGuard = () => {
@@ -456,6 +769,7 @@
                 const loadConfig = async (type) => {
                     currentTab.value = `config_${type}`;
                     currentConfigType.value = type;
+                    editingFarmConfig.value = null;
                     saveMessage.value = '';
                     try {
                         const res = await fetch(`/api/config/${type}`);
@@ -469,7 +783,17 @@
                 const saveConfig = async () => {
                     try {
                         const json = JSON.parse(configContent.value);
-                        const res = await fetch(`/api/config/${currentConfigType.value}`, {
+                        
+                        // 判断是否是 farm 配置
+                        let url;
+                        if (currentConfigType.value && currentConfigType.value.startsWith('farm/')) {
+                            const name = currentConfigType.value.replace('farm/', '');
+                            url = `/api/farm/config/${name}`;
+                        } else {
+                            url = `/api/config/${currentConfigType.value}`;
+                        }
+                        
+                        const res = await fetch(url, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(json)
@@ -491,12 +815,18 @@
                     toggleProcess, runTool, formatMessage,
                     configContent, loadConfig, saveConfig, saveMessage,
                     searchGameId, queryGameId,
-                    showcaseLeaders, farmingLeaders, selectedShowcaseLeader, selectedFarmingLeader,
+                    showcaseLeaders, selectedShowcaseLeader,
                     loadLeaders, verifyLeader,
                     steamGuardVisible, steamGuardDomain, steamGuardCode, 
                     submitSteamGuard, cancelSteamGuard,
                     // 日志页签相关
-                    logTabTitle, filteredLogs, clearCurrentLogs, farmingStats
+                    logTabTitle, filteredLogs, clearCurrentLogs, farmingStats,
+                    farmingTotalElapsed, farmingTotalInLobby, farmingTotalFollowers,
+                    // Farm 配置相关
+                    farmConfigs, farmingProgress, editingFarmConfig,
+                    farmFollowersContent, farmProxiesContent,
+                    refreshFarmConfigs, showFarmConfigs, addFarmConfig, editFarmConfig,
+                    saveFarmConfig, skipFarmingConfig, formatElapsed
                 };
             }
         }).mount('#app');

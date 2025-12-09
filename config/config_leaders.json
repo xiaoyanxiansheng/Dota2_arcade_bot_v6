@@ -1,0 +1,28 @@
+{
+  "global_settings": {
+    "target_app_id": 570,
+    "custom_game_id": "3586896069",
+    "server_regions": [
+      1,
+      2,
+      5,
+      7,
+      14,
+      19
+    ],
+    "lobby_password": "wuxian",
+    "max_players_per_room": 10,
+    "seeding_mode": true,
+    "seeding_threshold": 4,
+    "debug_mode": true,
+    "shared_steam_data_path": "../shared_steam_data"
+  },
+  "leaders": [
+    {
+      "username": "xiaoyanxiansheng1",
+      "password": "Wg13127877713",
+      "shared_secret": "vt3l9pGy3y93cYBogmq/zJaVe3s="
+    }
+  ]
+}
+
