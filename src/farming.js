@@ -415,11 +415,12 @@ class FollowerBot {
         // 设置登录超时（30秒）
         this.loginTimeoutHandle = setTimeout(() => {
             if (this.state === FollowerState.LOGGING_IN && !this.is_gc_connected) {
+                const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+                logWarning('Follower', `⏱️ ${this.account.username} 登录超时(30s) [${proxyIp}] → 放回队列`);
                 // 超时，清理并放回队列
                 this.cleanup();
                 this.state = FollowerState.PENDING;
                 this.pool.loginQueue.push(this);
-                // 不打印日志避免刷屏
             }
         }, this.LOGIN_TIMEOUT);
         
@@ -525,12 +526,23 @@ class FollowerBot {
         // 清除登录超时定时器
         this.clearLoginTimeout();
         
-        // 记录代理失败，并打印具体代理IP
+        // 记录代理失败，并打印详细错误信息
+        const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+        const errorCode = err.code || 'NO_CODE';
         const isProxyTimeout = errorMessage.includes('timed out') || errorMessage.includes('ETIMEDOUT');
+        const isConnectionError = ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(errorCode);
+        
         if (this.proxy && isProxyTimeout) {
-            const proxyIp = this.proxy.split('@')[1] || this.proxy;
             this.manager.recordProxyFailure(this.proxy);
-            logWarning('Follower', `⚠️ ${this.account.username} 超时 [${proxyIp}] → 放回队列`);
+        }
+        
+        // 打印详细错误信息（区分错误类型）
+        if (isProxyTimeout) {
+            logWarning('Follower', `🔌 ${this.account.username} 代理超时 [${proxyIp}] code=${errorCode} → 放回队列`);
+        } else if (isConnectionError) {
+            logWarning('Follower', `🔗 ${this.account.username} 连接错误 [${proxyIp}] code=${errorCode} → 放回队列`);
+        } else {
+            logWarning('Follower', `❌ ${this.account.username} 登录失败 [${proxyIp}] code=${errorCode} msg=${errorMessage} → 放回队列`);
         }
         
         // 失败后：清理并放回登录队列末尾
@@ -539,11 +551,6 @@ class FollowerBot {
         
         // 放回登录队列末尾，等待下次轮到
         this.pool.loginQueue.push(this);
-        
-        // 只打印非代理超时的其他错误
-        if (!isProxyTimeout && !['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED'].includes(err.code)) {
-            logWarning('Follower', `${this.account.username} 登录失败: ${errorMessage} → 放回队列`);
-        }
     }
 
     handleGCMessage(appid, msgType, payload) {
@@ -653,7 +660,8 @@ class FollowerBot {
         this.joinTimeoutHandle = setTimeout(() => {
             if (this.state === FollowerState.ASSIGNED) {
                 // 超时，回到池子
-                logWarning('Follower', `${this.account.username} 加入房间超时 → 回到池子`);
+                const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+                logWarning('Follower', `⏱️ ${this.account.username} 加入房间超时(30s) [${proxyIp}] lobbyId=${this.assignedLobbyId} → 回到池子`);
                 this.pool.returnToPool(this);
             }
         }, this.JOIN_TIMEOUT);
@@ -812,9 +820,10 @@ class FollowerBot {
 
         this.client.on('error', (err) => {
             // 重连失败，继续重试
-            if (!['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED'].includes(err.code)) {
-                logWarning('Follower', `${this.account.username} 重连失败: ${err.message} → 继续重试`);
-            }
+            const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+            const errorCode = err.code || 'NO_CODE';
+            const errorMessage = err.message || String(err);
+            logWarning('Follower', `🔄 ${this.account.username} 重连失败 [${proxyIp}] code=${errorCode} msg=${errorMessage} → 继续重试`);
             this.cleanupForReconnect();
             setTimeout(() => this.startForReconnect(), 3000);
         });
