@@ -1,170 +1,209 @@
-const { SocksProxyAgent } = require('socks-proxy-agent');
-const { HttpsProxyAgent } = require('https-proxy-agent');
-const https = require('https');
-const fs = require('fs');
-const path = require('path');
-
 /**
- * 代理测试工具
- * 用于批量测试 proxies.txt 中的代理是否可用
+ * 代理测试工具 v1.0
+ * 
+ * 测试 config_leaders.json 中的所有代理是否可用
+ * 通过连接 Steam API 来验证代理
  */
 
-const TIMEOUT = 10000; // 10秒超时
-const TEST_URL = 'https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/';
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
-// 读取代理列表
 const projectRoot = path.join(__dirname, '..');
-function loadProxies() {
-    try {
-        const proxiesPath = path.join(projectRoot, 'data', 'proxies.txt');
-        const content = fs.readFileSync(proxiesPath, 'utf8');
-        return content.split('\n')
-            .map(line => line.trim())
-            .filter(line => line.length > 0);
-    } catch (e) {
-        console.error("❌ 无法读取 proxies.txt: " + e.message);
-        process.exit(1);
+
+// 配置
+const TEST_URL = 'https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/';
+const TEST_TIMEOUT = 30000;   // 30秒超时
+const SEND_INTERVAL = 100;    // 每0.1秒发送一个
+
+// 统计
+let totalProxies = 0;
+let completedCount = 0;
+let successCount = 0;
+let failedCount = 0;
+let pendingCount = 0;
+let successProxies = [];
+const startTime = Date.now();
+
+// 错误统计
+const errorStats = {};
+
+function recordError(reason) {
+    const key = reason.substring(0, 50);
+    errorStats[key] = (errorStats[key] || 0) + 1;
+}
+
+function printStatus(detail = '') {
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+    const percent = totalProxies > 0 ? ((completedCount / totalProxies) * 100).toFixed(1) : 0;
+    const successRate = completedCount > 0 ? ((successCount / completedCount) * 100).toFixed(1) : 0;
+    console.log(`[Stats] 总:${totalProxies} | ✅成功:${successCount} | ❌失败:${failedCount} | ⏳测试中:${pendingCount} | 进度:${percent}% | 成功率:${successRate}% | ⏱️${elapsed}s`);
+    if (detail) {
+        console.log(detail);
     }
 }
 
 // 测试单个代理
-function testProxy(proxyUrl, index, total) {
+function testProxy(proxyUrl) {
     return new Promise((resolve) => {
-        const startTime = Date.now();
-        
+        const timeout = setTimeout(() => {
+            resolve({ success: false, error: 'Timeout' });
+        }, TEST_TIMEOUT);
+
         try {
-            // 判断是 SOCKS5 还是 HTTP 代理
-            let agent;
-            if (proxyUrl.startsWith('socks5://') || proxyUrl.startsWith('socks4://')) {
-                agent = new SocksProxyAgent(proxyUrl);
-            } else {
-                // 假设是 HTTP/HTTPS 代理
-                agent = new HttpsProxyAgent(proxyUrl);
-            }
-            
-            const req = https.get(TEST_URL, { 
-                agent: agent,
-                timeout: TIMEOUT,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0'
-                }
-            }, (res) => {
-                const latency = Date.now() - startTime;
+            const agent = new HttpsProxyAgent(proxyUrl);
+            const req = https.get(TEST_URL, { agent, timeout: TEST_TIMEOUT }, (res) => {
+                clearTimeout(timeout);
                 if (res.statusCode === 200) {
-                    console.log(`✅ [${index}/${total}] ${latency}ms - ${maskProxy(proxyUrl)}`);
-                    resolve({ success: true, proxy: proxyUrl, latency });
+                    resolve({ success: true });
                 } else {
-                    console.log(`⚠️ [${index}/${total}] HTTP ${res.statusCode} - ${maskProxy(proxyUrl)}`);
-                    resolve({ success: false, proxy: proxyUrl, reason: `HTTP ${res.statusCode}` });
+                    resolve({ success: false, error: `HTTP ${res.statusCode}` });
                 }
+                res.resume();
             });
-            
+
             req.on('error', (err) => {
-                console.log(`❌ [${index}/${total}] ${err.message} - ${maskProxy(proxyUrl)}`);
-                resolve({ success: false, proxy: proxyUrl, reason: err.message });
+                clearTimeout(timeout);
+                resolve({ success: false, error: err.message || err.code || 'Unknown' });
             });
-            
+
             req.on('timeout', () => {
-                req.abort();
-                console.log(`⏱️ [${index}/${total}] 超时 - ${maskProxy(proxyUrl)}`);
-                resolve({ success: false, proxy: proxyUrl, reason: 'Timeout' });
+                clearTimeout(timeout);
+                req.destroy();
+                resolve({ success: false, error: 'Request Timeout' });
             });
-            
         } catch (err) {
-            console.log(`❌ [${index}/${total}] ${err.message} - ${maskProxy(proxyUrl)}`);
-            resolve({ success: false, proxy: proxyUrl, reason: err.message });
+            clearTimeout(timeout);
+            resolve({ success: false, error: err.message });
         }
     });
 }
 
-// 脱敏显示代理信息（隐藏密码）
-function maskProxy(proxyUrl) {
-    return proxyUrl.replace(/:[^:@]+@/, ':****@');
-}
-
-// 批量测试代理（并发）
-async function testProxiesConcurrent(proxies, concurrency = 100) {
-    const results = [];
-    const total = proxies.length;
-    
-    console.log(`\n🔍 开始测试 ${total} 个代理 (并发数: ${concurrency})...\n`);
-    
-    for (let i = 0; i < proxies.length; i += concurrency) {
-        const batch = proxies.slice(i, i + concurrency);
-        const batchPromises = batch.map((proxy, idx) => 
-            testProxy(proxy, i + idx + 1, total)
-        );
-        
-        const batchResults = await Promise.all(batchPromises);
-        results.push(...batchResults);
-        
-        // 每批之间短暂延迟，避免过于激进
-        if (i + concurrency < proxies.length) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-    }
-    
-    return results;
-}
-
-// 保存测试结果
-function saveResults(results) {
-    const validProxies = results.filter(r => r.success).map(r => r.proxy);
-    const invalidProxies = results.filter(r => !r.success);
-    
-    // 保存可用的代理
-    fs.writeFileSync(path.join(projectRoot, 'data', 'proxies_valid.txt'), validProxies.join('\n'), 'utf8');
-    
-    // 保存详细报告
-    const report = {
-        testTime: new Date().toISOString(),
-        total: results.length,
-        valid: validProxies.length,
-        invalid: invalidProxies.length,
-        validRate: ((validProxies.length / results.length) * 100).toFixed(2) + '%',
-        details: results
-    };
-    
-    // fs.writeFileSync(path.join(projectRoot, 'proxy_test_report.json'), JSON.stringify(report, null, 2), 'utf8');
-    
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`📊 测试完成！`);
-    console.log(`${'='.repeat(60)}`);
-    console.log(`总计: ${results.length} 个代理`);
-    console.log(`✅ 可用: ${validProxies.length} 个 (${report.validRate})`);
-    console.log(`❌ 失效: ${invalidProxies.length} 个`);
-    console.log(`\n💾 可用代理已保存至: data/proxies_valid.txt`);
-    // console.log(`📄 详细报告已保存至: proxy_test_report.json`);
-    
-    if (validProxies.length > 0) {
-        const avgLatency = results
-            .filter(r => r.success)
-            .reduce((sum, r) => sum + r.latency, 0) / validProxies.length;
-        console.log(`⚡ 平均延迟: ${avgLatency.toFixed(0)}ms`);
-    }
-    
-    console.log(`\n💡 提示: 将 data/proxies_valid.txt 重命名为 data/proxies.txt 以使用可用代理`);
-}
-
 // 主函数
 async function main() {
-    const proxies = loadProxies();
-    
-    if (proxies.length === 0) {
-        console.error("❌ proxies.txt 中没有找到代理");
+    console.log('======================================================================');
+    console.log('代理测试工具 v1.0 - Steam API 连接测试');
+    console.log('======================================================================');
+
+    // 读取配置
+    const configPath = path.join(projectRoot, 'config', 'config_leaders.json');
+    let config;
+    try {
+        const content = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
+        config = JSON.parse(content);
+    } catch (e) {
+        console.error(`❌ 读取配置失败: ${e.message}`);
         process.exit(1);
     }
+
+    const proxies = config.proxies || [];
+    totalProxies = proxies.length;
+
+    if (totalProxies === 0) {
+        console.log('❌ 代理列表为空');
+        process.exit(1);
+    }
+
+    console.log(`[配置] 代理数量: ${totalProxies}`);
+    console.log(`[配置] 发送间隔: ${SEND_INTERVAL}ms (每秒10个)`);
+    console.log(`[配置] 超时时间: ${TEST_TIMEOUT}ms`);
+    console.log(`[配置] 测试目标: ${TEST_URL}`);
+    console.log('======================================================================');
+    console.log('开始流水线测试...');
+    console.log('======================================================================');
+
+    // 状态打印定时器
+    const statusInterval = setInterval(() => printStatus(), 2000);
+
+    // 流水线测试
+    let index = 0;
     
-    console.log(`📋 读取到 ${proxies.length} 个代理`);
+    const sendNext = () => {
+        if (index >= proxies.length) {
+            return;
+        }
+        
+        const currentIndex = index++;
+        const proxy = proxies[currentIndex];
+        pendingCount++;
+        
+        testProxy(proxy).then(result => {
+            pendingCount--;
+            completedCount++;
+            
+            if (result.success) {
+                successCount++;
+                successProxies.push(proxy);
+                console.log(`[✅] ${proxy.substring(0, 60)}...`);
+            } else {
+                failedCount++;
+                recordError(result.error);
+                console.log(`[❌] ${proxy.substring(0, 50)}... - ${result.error}`);
+            }
+        });
+        
+        setTimeout(sendNext, SEND_INTERVAL);
+    };
     
-    const results = await testProxiesConcurrent(proxies, 100);
+    sendNext();
     
-    saveResults(results);
+    // 等待所有测试完成
+    await new Promise(resolve => {
+        const checkComplete = setInterval(() => {
+            if (completedCount >= totalProxies) {
+                clearInterval(checkComplete);
+                resolve();
+            }
+        }, 500);
+    });
+
+    clearInterval(statusInterval);
+
+    // 最终统计
+    console.log('======================================================================');
+    console.log('测试完成');
+    console.log('======================================================================');
+    printStatus();
+    
+    const successRate = totalProxies > 0 ? ((successCount / totalProxies) * 100).toFixed(1) : 0;
+    console.log(`\n📊 成功率: ${successRate}%`);
+    
+    if (Object.keys(errorStats).length > 0) {
+        console.log('\n📋 错误统计:');
+        Object.entries(errorStats)
+            .sort((a, b) => b[1] - a[1])
+            .forEach(([error, count]) => {
+                console.log(`   ${error}: ${count}次`);
+            });
+    }
+
+    // 保存成功的代理
+    if (successProxies.length > 0) {
+        const successPath = path.join(projectRoot, 'data', 'success_proxies.json');
+        try {
+            fs.mkdirSync(path.dirname(successPath), { recursive: true });
+            fs.writeFileSync(successPath, JSON.stringify(successProxies, null, 2), 'utf8');
+            console.log(`\n💾 成功代理已保存到: ${successPath} (${successProxies.length} 个)`);
+            console.log(`\n📋 可通过 Web 界面的"替换代理"按钮将成功代理写入配置`);
+        } catch (e) {
+            console.log(`\n⚠️ 保存成功代理列表失败: ${e.message}`);
+        }
+    }
+
+    console.log('\n✅ 测试完成');
 }
 
-// 执行
-main().catch(err => {
-    console.error("❌ 发生错误:", err);
-    process.exit(1);
+// 防止未捕获的错误导致程序崩溃
+process.on('uncaughtException', (err) => {
+    console.error('未捕获的异常:', err.message);
 });
 
+process.on('unhandledRejection', (reason) => {
+    console.error('未处理的 Promise 拒绝:', reason);
+});
+
+main().catch(err => {
+    console.error('程序错误:', err);
+    process.exit(1);
+});

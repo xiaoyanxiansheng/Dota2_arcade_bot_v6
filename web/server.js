@@ -44,13 +44,15 @@ function broadcastLog(source, message, type = 'info') {
 }
 
 // 帮助函数：启动进程
-function startProcess(key, command, args, cwd = PROJECT_ROOT) {
+// logSource: 日志来源名称（可选，默认使用 key）
+function startProcess(key, command, args, cwd = PROJECT_ROOT, logSource = null) {
     if (processes[key].process) {
         broadcastLog('System', `${key} 进程已在运行中`, 'warning');
         return false;
     }
 
-    broadcastLog('System', `正在启动 ${key} ...`, 'info');
+    const source = logSource || key;  // 使用自定义 source 或默认 key
+    broadcastLog('System', `正在启动 ${source} ...`, 'info');
     
     // 移除 shell: true，直接启动 node 进程，这样可以获得准确的 PID
     const child = spawn(command, args, { 
@@ -60,6 +62,7 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT) {
     });
     processes[key].process = child;
     processes[key].startTime = Date.now();
+    processes[key].logSource = source;  // 保存 source
 
     // 状态推送
     io.emit('status', { [key]: true });
@@ -74,7 +77,7 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT) {
                     const domain = line.replace('[STEAM_GUARD]', '').trim();
                     io.emit('needSteamGuard', { key, domain });
                 }
-                broadcastLog(key, line, 'info');
+                broadcastLog(source, line, 'info');
             }
         });
     });
@@ -83,7 +86,7 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT) {
         const lines = data.toString().split('\n');
         lines.forEach(line => {
             if (line.trim()) {
-                broadcastLog(key, line, 'error');
+                broadcastLog(source, line, 'error');
             }
         });
     });
@@ -268,7 +271,7 @@ app.post('/api/config/:type', (req, res) => {
 // Farm 配置管理 API
 // ============================================
 
-// 获取所有 farm 配置列表（新格式：目录结构）
+// 获取所有 farm 配置列表（v4.0：不再有 proxies.txt）
 app.get('/api/farm/configs', (req, res) => {
     try {
         const farmDir = path.join(PROJECT_ROOT, 'config', 'farm');
@@ -287,19 +290,14 @@ app.get('/api/farm/configs', (req, res) => {
                 const name = item.name;
                 const configDir = path.join(farmDir, name);
                 const followersPath = path.join(configDir, 'followers.txt');
-                const proxiesPath = path.join(configDir, 'proxies.txt');
                 
-                let followers = 0, proxies = 0;
+                let followers = 0;
                 if (fs.existsSync(followersPath)) {
                     const content = fs.readFileSync(followersPath, 'utf8');
                     followers = content.split('\n').filter(line => line.trim() && line.includes(',')).length;
                 }
-                if (fs.existsSync(proxiesPath)) {
-                    const content = fs.readFileSync(proxiesPath, 'utf8');
-                    proxies = content.split('\n').filter(line => line.trim()).length;
-                }
                 
-                return { name, followers, proxies };
+                return { name, followers };
             })
             .filter(cfg => cfg.followers > 0); // 只返回有小号的配置
         
@@ -309,7 +307,7 @@ app.get('/api/farm/configs', (req, res) => {
     }
 });
 
-// 读取单个 farm 配置（返回 followers.txt 和 proxies.txt 的内容）
+// 读取单个 farm 配置（v4.0：只返回 followers.txt）
 app.get('/api/farm/config/:name', (req, res) => {
     try {
         const name = req.params.name;
@@ -320,18 +318,15 @@ app.get('/api/farm/config/:name', (req, res) => {
         }
         
         const followersPath = path.join(configDir, 'followers.txt');
-        const proxiesPath = path.join(configDir, 'proxies.txt');
-        
         const followers = fs.existsSync(followersPath) ? fs.readFileSync(followersPath, 'utf8') : '';
-        const proxies = fs.existsSync(proxiesPath) ? fs.readFileSync(proxiesPath, 'utf8') : '';
         
-        res.json({ followers, proxies });
+        res.json({ followers });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
 
-// 保存单个 farm 配置（保存 followers.txt 和 proxies.txt）
+// 保存单个 farm 配置（v4.0：只保存 followers.txt）
 app.post('/api/farm/config/:name', (req, res) => {
     try {
         const name = req.params.name;
@@ -342,13 +337,10 @@ app.post('/api/farm/config/:name', (req, res) => {
             fs.mkdirSync(configDir, { recursive: true });
         }
         
-        const { followers, proxies } = req.body;
+        const { followers } = req.body;
         
         if (followers !== undefined) {
             fs.writeFileSync(path.join(configDir, 'followers.txt'), followers, 'utf8');
-        }
-        if (proxies !== undefined) {
-            fs.writeFileSync(path.join(configDir, 'proxies.txt'), proxies, 'utf8');
         }
         
         broadcastLog('System', `Farm 配置已保存: ${name}`, 'success');
@@ -358,7 +350,7 @@ app.post('/api/farm/config/:name', (req, res) => {
     }
 });
 
-// 添加新的 farm 配置
+// 添加新的 farm 配置（v4.0：只创建 followers.txt）
 app.post('/api/farm/add', (req, res) => {
     try {
         const { name } = req.body;
@@ -377,7 +369,6 @@ app.post('/api/farm/add', (req, res) => {
         // 创建目录和空文件
         fs.mkdirSync(configDir, { recursive: true });
         fs.writeFileSync(path.join(configDir, 'followers.txt'), '# 格式：用户名,密码 (每行一个)\n', 'utf8');
-        fs.writeFileSync(path.join(configDir, 'proxies.txt'), '# 格式：http://user:pass@host:port (每行一个)\n', 'utf8');
         
         broadcastLog('System', `新建 Farm 配置: ${name}`, 'success');
         res.json({ success: true });
@@ -386,16 +377,22 @@ app.post('/api/farm/add', (req, res) => {
     }
 });
 
-// 跳过当前 farm 配置
-app.post('/api/farm/skip', (req, res) => {
+// 将配置加入小号池子（v4.0 新增）
+app.post('/api/farm/add_to_pool', (req, res) => {
+    const { configName } = req.body;
+    
+    if (!configName) {
+        return res.status(400).json({ error: '缺少配置名称' });
+    }
+    
     if (!processes.farming.process || !processes.farming.process.stdin) {
         return res.status(400).json({ error: '挂机车队未运行' });
     }
     
     try {
-        const command = JSON.stringify({ type: 'skip_config' }) + '\n';
+        const command = JSON.stringify({ type: 'add_config', configName }) + '\n';
         processes.farming.process.stdin.write(command);
-        broadcastLog('System', '已发送跳过命令', 'info');
+        broadcastLog('System', `已发送添加配置命令: ${configName}`, 'info');
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -482,6 +479,57 @@ app.post('/api/process/:name/:action', (req, res) => {
     }
 });
 
+// 替换代理配置（用测试成功的代理）
+app.post('/api/proxy/replace', (req, res) => {
+    const successProxiesPath = path.join(PROJECT_ROOT, 'data', 'success_proxies.json');
+    const leadersConfigPath = path.join(PROJECT_ROOT, 'config', 'config_leaders.json');
+    
+    try {
+        // 读取成功代理列表
+        if (!fs.existsSync(successProxiesPath)) {
+            return res.status(400).json({ error: '没有找到成功代理列表，请先运行代理测试' });
+        }
+        const successProxies = JSON.parse(fs.readFileSync(successProxiesPath, 'utf8'));
+        
+        if (!Array.isArray(successProxies) || successProxies.length === 0) {
+            return res.status(400).json({ error: '成功代理列表为空' });
+        }
+        
+        // 读取主号配置
+        const leadersConfig = JSON.parse(fs.readFileSync(leadersConfigPath, 'utf8').replace(/^\uFEFF/, ''));
+        const originalCount = (leadersConfig.proxies || []).length;
+        
+        // 替换代理列表
+        leadersConfig.proxies = successProxies;
+        
+        // 写回配置文件
+        fs.writeFileSync(leadersConfigPath, JSON.stringify(leadersConfig, null, 2), 'utf8');
+        
+        broadcastLog('System', `✅ 代理配置已替换: ${originalCount} → ${successProxies.length}`, 'success');
+        res.json({ success: true, originalCount, newCount: successProxies.length });
+        
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 停止工具（必须在 /api/tool/:name 之前定义，否则会被 :name 匹配）
+app.post('/api/tool/stop', (req, res) => {
+    console.log('[DEBUG] /api/tool/stop called');
+    
+    if (!processes.tool.process) {
+        return res.status(400).json({ error: 'No tool is running' });
+    }
+    
+    const toolName = processes.tool.name;
+    const pid = processes.tool.process.pid;
+    console.log('[DEBUG] Stopping tool:', toolName, 'PID:', pid);
+    
+    stopProcess('tool');
+    broadcastLog('System', `已停止工具: ${toolName} (PID: ${pid})`, 'warning');
+    res.json({ success: true });
+});
+
 // 执行工具
 app.post('/api/tool/:name', (req, res) => {
     const name = req.params.name;
@@ -502,8 +550,11 @@ app.post('/api/tool/:name', (req, res) => {
         processes.tool.name = `Login Leader: ${username}`;
         
     } else if (name === 'subscribe_map') {
-        // 订阅地图
-        args = ['commands/subscribe_map.js'];
+        // 订阅地图: 可选 configName 和 gameId
+        const configName = body.configName || '';
+        const gameId = body.gameId || '';
+        console.log(`[Subscribe] configName=${configName}, gameId=${gameId}`);
+        args = ['commands/subscribe_map.js', configName, gameId];
         processes.tool.name = 'Subscribe Maps';
         
     } else if (name === 'list_lobbies') {
@@ -511,6 +562,11 @@ app.post('/api/tool/:name', (req, res) => {
         const gameId = body.gameId || '';
         args = ['commands/list_lobbies.js', gameId];
         processes.tool.name = 'List Lobbies';
+        
+    } else if (name === 'test_proxies') {
+        // 测试代理
+        args = ['commands/test_proxies.js'];
+        processes.tool.name = 'Test Proxies';
         
     } else if (name === 'clear_all') {
         // 清理所有
@@ -522,7 +578,9 @@ app.post('/api/tool/:name', (req, res) => {
     }
 
     io.emit('toolStatus', { running: true, name: processes.tool.name });
-    const success = startProcess('tool', cmd, args);
+    // 用具体的工具名作为日志 source
+    const logSource = name;  // subscribe_map, list_lobbies, test_proxies, etc.
+    const success = startProcess('tool', cmd, args, PROJECT_ROOT, logSource);
     res.json({ success });
 });
 

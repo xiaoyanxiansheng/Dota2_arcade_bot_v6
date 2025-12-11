@@ -624,13 +624,13 @@ class FleetManager {
         this.bots.forEach(bot => {
             try {
                 bot.cleanup();
-                successCount++;
+                    successCount++;
             } catch (err) {}
         });
         return successCount;
     }
-}
-
+                }
+                
 // ============================================
 // BotClient - Bot客户端
 // ============================================
@@ -670,7 +670,7 @@ class BotClient {
 
         this.setupListeners();
     }
-
+    
     log(msg) {
         if (this.settings.debug_mode) {
             console.log(`[${formatTime()}] [${this.account.username}|${this.role}] ${msg}`);
@@ -708,7 +708,7 @@ class BotClient {
 
     start() {
         if (this.state === 'ABANDONED') return;
-        
+
         this.state = 'LOGGING_IN';
         this.log(`开始登录...`);
         
@@ -735,15 +735,15 @@ class BotClient {
         this.client.removeAllListeners('receivedFromGC');
         
         this.client.on('loggedOn', () => {
-            this.log('Steam 登录成功');
+                this.log('Steam 登录成功');
             this.retryCount = 0;
             this.client.setPersona(SteamUser.EPersonaState.Online);
             this.client.gamesPlayed([this.settings.target_app_id]);
-        });
+    });
 
         this.client.on('appLaunched', (appid) => {
             if (appid === this.settings.target_app_id) {
-                this.log('🎮 Dota 2 启动');
+                    this.log('🎮 Dota 2 启动');
                 setTimeout(() => this.connectGC(), 2000);
             }
         });
@@ -793,7 +793,7 @@ class BotClient {
                 this.createPublicRoom();
             } else if (this.role === 'LEADER') {
                 this.createFarmingRoom();
-            } else {
+                } else {
                 this.enterIdlePool();
             }
         }, 1500);
@@ -1043,14 +1043,14 @@ class BotClient {
     leaveLobby() {
         try {
             this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
-            this.currentLobbyId = null;
+                                this.currentLobbyId = null;
             this.state = 'ONLINE';
-            
-            if (this.ready_up_heartbeat) {
-                clearInterval(this.ready_up_heartbeat);
-                this.ready_up_heartbeat = null;
-            }
-            
+                                
+                                if (this.ready_up_heartbeat) {
+                                    clearInterval(this.ready_up_heartbeat);
+                                    this.ready_up_heartbeat = null;
+                                }
+                                
             if (this.poll_interval) {
                 clearInterval(this.poll_interval);
                 this.poll_interval = null;
@@ -1120,18 +1120,18 @@ class BotClient {
             } catch (e) {}
         }
         else if (cleanMsgType === k_EMsgGCPracticeLobbyJoinResponse) {
-            try {
+             try {
                 const response = CMsgPracticeLobbyJoinResponse.decode(payload);
                 if (response.result === DOTAJoinLobbyResult.DOTA_JOIN_RESULT_SUCCESS) {
                     this.onEnterLobby();
                 } else {
                     this.log(`加入失败: ${JoinResultName[response.result] || response.result}`);
                 }
-            } catch(e) {}
+             } catch(e) {}
         }
         else if (cleanMsgType === k_EMsgGCReadyUpStatus) {
-            try {
-                const status = CMsgReadyUpStatus.decode(payload);
+             try {
+                 const status = CMsgReadyUpStatus.decode(payload);
                 if (status.lobbyId) this.currentLobbyId = status.lobbyId;
                 setTimeout(() => this.sendReadyUp(this.currentLobbyId), 200);
             } catch(e) {}
@@ -1163,7 +1163,7 @@ class BotClient {
                 
                 // 挂机主号：检测有人加入后离开
                 if (this.role === 'LEADER' && this.state === 'SEEDING') {
-                    if (memberCount > 1) {
+                        if (memberCount > 1) {
                         this.log(`有小号加入 (${memberCount}人)，离开并创建新房间`);
                         this.globalManager.roomTracker.updateMemberCount(lobbyId, memberCount);
                         
@@ -1178,11 +1178,11 @@ class BotClient {
 
     onEnterLobby() {
         if (this.state === 'IN_LOBBY' && this.role !== 'SHOWCASE_LEADER') return;
-        this.state = 'IN_LOBBY';
+            this.state = 'IN_LOBBY';
         this.log(`✅ 已进入房间`);
-        
+                 
         // 设置队伍
-        setTimeout(() => {
+                 setTimeout(() => {
             const teamMsg = CMsgPracticeLobbySetTeamSlot.create({ team: DOTA_GC_TEAM.DOTA_GC_TEAM_GOOD_GUYS, slot: 0 });
             const teamBuf = CMsgPracticeLobbySetTeamSlot.encode(teamMsg).finish();
             this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbySetTeamSlot | k_EMsgProtoMask, {}, teamBuf);
@@ -1200,9 +1200,9 @@ class BotClient {
     sendReadyUp(lobbyId) {
         try {
             const payload = {
-                state: DOTALobbyReadyState.DOTALobbyReadyState_READY,
-                hardware_specs: getHardwareSpecs()
-            };
+                             state: DOTALobbyReadyState.DOTALobbyReadyState_READY,
+                             hardware_specs: getHardwareSpecs()
+                         };
             if (lobbyId) payload.ready_up_key = lobbyId;
             const message = CMsgReadyUp.create(payload);
             const buffer = CMsgReadyUp.encode(message).finish();
@@ -1234,11 +1234,11 @@ const args = process.argv.slice(2);
 const isDebugMode = args.includes('debug');
 
 let config;
-try {
+             try {
     const configPath = path.join(projectRoot, 'config', 'config.json');
     const rawContent = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
     config = JSON.parse(rawContent);
-} catch (e) {
+             } catch (e) {
     console.error("❌ 读取配置失败: " + e.message);
     process.exit(1);
 }
@@ -1283,19 +1283,19 @@ if (showcaseLeaders.length === 0 && fleets.length > 0 && Array.isArray(fleets[0]
         const followers = fleets[0].followers || [];
         const followersPerLeader = Math.floor(followers.length / farmingLeaders.length);
         
-        fleets = [];
-        let followerIndex = 0;
+    fleets = [];
+    let followerIndex = 0;
         farmingLeaders.forEach((leader, idx) => {
             const currentFollowers = followers.slice(followerIndex, followerIndex + followersPerLeader);
             followerIndex += followersPerLeader;
-            
-            fleets.push({
-                id: `fleet_${idx + 1}`,
-                leader: leader,
-                followers: currentFollowers
-            });
-        });
         
+        fleets.push({
+            id: `fleet_${idx + 1}`,
+                leader: leader,
+            followers: currentFollowers
+        });
+    });
+    
         // 剩余小号分配给最后一个车队
         if (followerIndex < followers.length && fleets.length > 0) {
             fleets[fleets.length - 1].followers.push(...followers.slice(followerIndex));
@@ -1326,12 +1326,12 @@ setTimeout(() => {
     logSection('挂机车队启动');
     
     let globalFollowerOffset = 0;
-    fleets.forEach((fleetConfig, leaderIndex) => {
+fleets.forEach((fleetConfig, leaderIndex) => {
         const fleet = new FleetManager(fleetConfig, globalSettings, globalFollowerOffset, globalManager);
         globalManager.addFleetManager(fleet);
         fleet.start(leaderIndex);
-        globalFollowerOffset += (fleetConfig.followers?.length || 0);
-    });
+    globalFollowerOffset += (fleetConfig.followers?.length || 0);
+});
 }, 30000); // 30秒后启动挂机车队
 
 // 状态监控

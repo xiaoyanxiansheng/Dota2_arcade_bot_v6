@@ -25,6 +25,72 @@ const http = require('http');
 const projectRoot = path.join(__dirname, '..');
 
 // ============================================
+// 文件日志配置
+// ============================================
+const LOG_CONFIG = {
+    enabled: true,           // 是否启用文件日志
+    retainDays: 7,           // 保留天数
+    logDir: path.join(projectRoot, 'logs')
+};
+
+// 确保日志目录存在
+if (LOG_CONFIG.enabled && !fs.existsSync(LOG_CONFIG.logDir)) {
+    fs.mkdirSync(LOG_CONFIG.logDir, { recursive: true });
+}
+
+// 获取当天日志文件路径
+function getLogFilePath() {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    return path.join(LOG_CONFIG.logDir, `showcase_${today}.log`);
+}
+
+// 写入日志文件
+function writeToLogFile(level, category, message) {
+    if (!LOG_CONFIG.enabled) return;
+    
+    try {
+        const timestamp = new Date().toISOString();
+        const logLine = `[${timestamp}] [${level}] [${category}] ${message}\n`;
+        fs.appendFileSync(getLogFilePath(), logLine);
+    } catch (err) {
+        // 忽略写入错误，避免影响主流程
+    }
+}
+
+// 清理旧日志文件（启动时调用）
+function cleanOldLogs() {
+    if (!LOG_CONFIG.enabled) return;
+    
+    try {
+        const files = fs.readdirSync(LOG_CONFIG.logDir);
+        const now = Date.now();
+        const maxAge = LOG_CONFIG.retainDays * 24 * 60 * 60 * 1000;
+        let cleaned = 0;
+        
+        files.forEach(file => {
+            if (!file.startsWith('showcase_') || !file.endsWith('.log')) return;
+            
+            const filePath = path.join(LOG_CONFIG.logDir, file);
+            const stat = fs.statSync(filePath);
+            
+            if (now - stat.mtime.getTime() > maxAge) {
+                fs.unlinkSync(filePath);
+                cleaned++;
+            }
+        });
+        
+        if (cleaned > 0) {
+            console.log(`[System] 🧹 已清理 ${cleaned} 个旧日志文件`);
+        }
+    } catch (err) {
+        // 忽略清理错误
+    }
+}
+
+// 启动时清理旧日志
+cleanOldLogs();
+
+// ============================================
 // GC 消息 ID 定义
 // ============================================
 const k_EMsgGCClientHello = 4006;
@@ -144,27 +210,33 @@ function logSection(title) {
     console.log('\n' + '═'.repeat(70));
     console.log(`║ ${title}`);
     console.log('═'.repeat(70));
+    writeToLogFile('INFO', 'Section', title);
 }
 
 function logInfo(category, message) {
     console.log(`[${formatTime()}] [${category}] ${message}`);
+    writeToLogFile('INFO', category, message);
 }
 
 function logSuccess(category, message) {
     console.log(`[${formatTime()}] [${category}] ✅ ${message}`);
+    writeToLogFile('SUCCESS', category, message);
 }
 
 function logWarning(category, message) {
     console.log(`[${formatTime()}] [${category}] ⚠️ ${message}`);
+    writeToLogFile('WARNING', category, message);
 }
 
 function logError(category, message) {
     console.log(`[${formatTime()}] [${category}] ❌ ${message}`);
+    writeToLogFile('ERROR', category, message);
 }
 
 function logDebug(category, message, debugMode) {
     if (debugMode) {
         console.log(`[${formatTime()}] [${category}] 🔍 ${message}`);
+        writeToLogFile('DEBUG', category, message);
     }
 }
 
@@ -221,6 +293,12 @@ class ShowcaseBot {
     handleClientError(err) {
         this.error(`Steam 客户端错误: ${err.message}`);
         
+        // 错误发生后重置状态，允许重试
+        this.state = 'OFFLINE';
+        this.is_gc_connected = false;  // 重置GC连接状态
+        this.currentLobbyId = null;    // 重置房间ID
+        this.lobbyCreatedAt = null;    // 重置房间创建时间
+        
         if (err.message === 'LoggedInElsewhere') {
             this.error(`账号在其他地方登录，已放弃`);
             this.state = 'ABANDONED';
@@ -233,21 +311,21 @@ class ShowcaseBot {
             return;
         }
         
-        // 网络错误重试（使用相同代理）
+        // 网络错误重试（使用相同代理，无限重试，固定30秒间隔）
         if (err.message.includes('timed out') || err.message.includes('ETIMEDOUT')) {
             this.retryCount++;
-            if (this.retryCount < 5) {
-                const delay = Math.min(this.retryCount * 5000, 30000);
-                this.log(`网络超时，${delay/1000}秒后重试 (${this.retryCount}/5)`);
-                setTimeout(() => this.start(), delay);
-            } else {
-                this.error(`重试次数过多，放弃`);
-            }
+            this.log(`网络超时，30秒后重试`);
+            setTimeout(() => this.start(), 30000);
         }
     }
 
     start() {
         if (this.state === 'ABANDONED') return;
+        
+        // 防止重复登录
+        if (this.state === 'LOGGING_IN') {
+            return;
+        }
         
         this.state = 'LOGGING_IN';
         this.log(`🔐 开始登录...`);
@@ -655,18 +733,19 @@ class ShowcaseManager {
         const nextIndex = (this.currentActiveIndex + 1) % 2;
         const nextBot = this.bots[nextIndex];
         
-        logSection(`第 ${this.rotationCount} 次轮换`);
+        logSection(`第 ${this.rotationCount} 次轮换（双房间模式）`);
         logInfo('Showcase', `当前活跃: 主号${currentBot.label} (${currentBot.account.username})`);
-        logInfo('Showcase', `房间存活: ${this.getRoomAge(currentBot)} 分钟`);
-        logInfo('Showcase', `即将切换: 主号${nextBot.label} (${nextBot.account.username})`);
+        logInfo('Showcase', `主号${currentBot.label}房间: ${currentBot.currentLobbyId?.toString() || '无'} (存活: ${this.getRoomAge(currentBot)}分钟)`);
+        logInfo('Showcase', `主号${nextBot.label}房间: ${nextBot.currentLobbyId?.toString() || '无'} (存活: ${this.getRoomAge(nextBot)}分钟)`);
+        logInfo('Showcase', `即将操作: 主号${nextBot.label} 创建新房间`);
         
         try {
-            // ========== 主号轮换（必须执行）==========
+            // ========== 双房间模式轮换 ==========
             
             // 步骤1: 确保新主号已连接
             logInfo('Showcase', `[步骤1/3] 确保主号${nextBot.label}已连接...`);
-            if (!nextBot.is_gc_connected) {
-                logInfo('Showcase', `   主号${nextBot.label}尚未连接，启动登录...`);
+            if (!nextBot.is_gc_connected || nextBot.state === 'OFFLINE') {
+                logInfo('Showcase', `主号${nextBot.label}尚未连接，启动登录...`);
                 nextBot.start();
                 await this.waitForGCConnection(nextBot, 30000);
             }
@@ -676,10 +755,17 @@ class ShowcaseManager {
                 this.isRotating = false;
                 return;
             }
-            logSuccess('Showcase', `   主号${nextBot.label}已就绪`);
+            logSuccess('Showcase', `主号${nextBot.label}已就绪`);
             
-            // 步骤2: 新主号创建公开房
+            // 步骤2: 如果新主号有旧房间，先离开
             logInfo('Showcase', `[步骤2/3] 主号${nextBot.label}创建新公开房...`);
+            if (nextBot.currentLobbyId) {
+                const oldLobbyId = nextBot.currentLobbyId.toString();
+                logInfo('Showcase', `主号${nextBot.label}当前有旧房间 ${oldLobbyId}，先离开...`);
+                nextBot.leaveLobby();
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+            
             nextBot.createPublicRoom();
             await this.waitForRoomCreation(nextBot, 20000);
             
@@ -688,61 +774,51 @@ class ShowcaseManager {
                 this.isRotating = false;
                 return;
             }
-            logSuccess('Showcase', `   新公开房: ${nextBot.currentLobbyId.toString()}`);
+            logSuccess('Showcase', `新公开房: ${nextBot.currentLobbyId.toString()}`);
             
-            // 步骤3: 解散旧公开房
-            logInfo('Showcase', `[步骤3/3] 解散主号${currentBot.label}的旧公开房...`);
+            // 步骤3: 【双房间模式】不解散旧主号的房间，保持两个房间同时存在
+            logInfo('Showcase', `[步骤3/3] 保持主号${currentBot.label}的房间（双房间模式）`);
             if (currentBot.currentLobbyId) {
-                const oldLobbyId = currentBot.currentLobbyId.toString();
-                currentBot.leaveLobby();
-                logSuccess('Showcase', `   已解散: ${oldLobbyId}`);
+                logInfo('Showcase', `主号${currentBot.label}房间保持: ${currentBot.currentLobbyId.toString()}`);
+            } else {
+                logInfo('Showcase', `主号${currentBot.label}当前无房间`);
             }
             
             // 更新活跃索引
             this.currentActiveIndex = nextIndex;
             
             logSuccess('Showcase', `主号轮换完成，当前活跃: 主号${nextBot.label}`);
+            logInfo('Showcase', `同时存在房间: 主号A=${this.bots[0].currentLobbyId?.toString() || '无'}, 主号B=${this.bots[1].currentLobbyId?.toString() || '无'}`);
             
-            // ========== 小号房间处理 ==========
+            // ========== 小号房间处理（简化版）==========
             
-            // 查询房间列表（带重试，确保主号房间已被GC收录）
+            // 查询房间列表
             logInfo('Showcase', `查询游廊房间列表...`);
             const targetGameId = this.settings.custom_game_id;
-            const showcaseLobbyId = nextBot.currentLobbyId?.toString();
             const minLobbyCountForRotation = this.settings.min_lobby_count_for_rotation || 75;
-            const maxRetries = 3;
-            const retryDelay = 2000; // 2秒
             
-            let lobbies, filteredLobbies, lobbyCount, showcaseInList;
+            const lobbies = await this.queryLobbies(nextBot);
+            const filteredLobbies = lobbies.filter(lobby => {
+                const gameId = lobby.customGameId?.toString();
+                return gameId === targetGameId;
+            });
+            const lobbyCount = filteredLobbies.length;
             
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                lobbies = await this.queryLobbies(nextBot);
-                filteredLobbies = lobbies.filter(lobby => {
-                    const gameId = lobby.customGameId?.toString();
-                    return gameId === targetGameId;
-                });
-                lobbyCount = filteredLobbies.length;
-                showcaseInList = filteredLobbies.some(lobby => lobby.lobbyId?.toString() === showcaseLobbyId);
-                
-                if (showcaseInList) {
-                    if (attempt > 1) {
-                        logInfo('Showcase', `第${attempt}次查询成功，主号房间已在列表中`);
-                    }
-                    break;
-                }
-                
-                if (attempt < maxRetries) {
-                    logInfo('Showcase', `主号房间暂未在列表中（第${attempt}次查询），${retryDelay/1000}秒后重试...`);
-                    await new Promise(resolve => setTimeout(resolve, retryDelay));
-                }
-            }
+            // 检查两个主号房间是否都在列表中
+            const botALobbyId = this.bots[0].currentLobbyId?.toString();
+            const botBLobbyId = this.bots[1].currentLobbyId?.toString();
+            const botAInList = botALobbyId ? filteredLobbies.some(l => l.lobbyId?.toString() === botALobbyId) : false;
+            const botBInList = botBLobbyId ? filteredLobbies.some(l => l.lobbyId?.toString() === botBLobbyId) : false;
             
-            logInfo('Showcase', `当前游廊房间: ${lobbyCount} 个，阈值: ${minLobbyCountForRotation}，主号房间在列表中: ${showcaseInList ? '是' : '否'}`);
+            logInfo('Showcase', `游廊房间: ${lobbyCount}个 | 主号A在列表: ${botAInList ? '是' : '否'} | 主号B在列表: ${botBInList ? '是' : '否'}`);
             
-            // 情况3: 重试后主号仍不在列表中 → 真正的展示位满了，强制解散
-            if (!showcaseInList) {
-                logWarning('Showcase', `⚠️ 多次查询后主号房间仍不在列表中（展示位已满），强制解散小号房间腾出位置...`);
-                const oldestRooms = this.findOldestRooms(lobbies, 5, nextBot.currentLobbyId);
+            // 获取当前所有主号房间ID（用于排除）
+            const showcaseLobbyIds = [botALobbyId, botBLobbyId].filter(id => id);
+            
+            // 如果两个主号房间都不在列表中，强制解散小号腾位置
+            if (!botAInList && !botBInList && (botALobbyId || botBLobbyId)) {
+                logWarning('Showcase', `⚠️ 两个主号房间都不在展示位，强制解散小号房间腾出位置...`);
+                const oldestRooms = this.findOldestRoomsExcluding(lobbies, 5, showcaseLobbyIds);
                 if (oldestRooms.length > 0) {
                     logInfo('Showcase', `通知挂机车队解散 ${oldestRooms.length} 个最老房间...`);
                     oldestRooms.forEach((room, idx) => {
@@ -753,11 +829,11 @@ class ShowcaseManager {
                     logWarning('Showcase', `没有找到可解散的挂机房间`);
                 }
             }
-            // 情况2: 房间数 >= 阈值 → 解散5个最老的小号
+            // 房间数 >= 阈值 → 解散5个最老的小号
             else if (lobbyCount >= minLobbyCountForRotation) {
-                const oldestRooms = this.findOldestRooms(lobbies, 5, nextBot.currentLobbyId);
+                const oldestRooms = this.findOldestRoomsExcluding(lobbies, 5, showcaseLobbyIds);
                 if (oldestRooms.length > 0) {
-                    logInfo('Showcase', `通知挂机车队解散 ${oldestRooms.length} 个最老房间...`);
+                    logInfo('Showcase', `房间数达到阈值(${lobbyCount}>=${minLobbyCountForRotation})，通知挂机车队解散 ${oldestRooms.length} 个最老房间...`);
                     oldestRooms.forEach((room, idx) => {
                         logInfo('Showcase', `   ${idx + 1}. ${room.lobbyId} (创建时间: ${new Date(room.createdAt * 1000).toLocaleTimeString()})`);
                     });
@@ -766,9 +842,9 @@ class ShowcaseManager {
                     logInfo('Showcase', `没有找到需要解散的挂机房间`);
                 }
             }
-            // 情况1: 房间数 < 阈值 → 不解散
+            // 房间数 < 阈值 → 不解散
             else {
-                logInfo('Showcase', `房间数量未达阈值，跳过解散小号房间`);
+                logInfo('Showcase', `房间数量(${lobbyCount})未达阈值(${minLobbyCountForRotation})，跳过解散`);
             }
             
             logSection(`轮换完成`);
@@ -790,12 +866,18 @@ class ShowcaseManager {
         });
     }
     
-    // 找到最老的N个挂机房间（排除当前展示房间）
+    // 找到最老的N个挂机房间（排除当前展示房间）- 兼容旧接口
     findOldestRooms(lobbies, count, currentShowcaseLobbyId) {
-        const currentShowcaseId = currentShowcaseLobbyId?.toString();
+        const excludeIds = currentShowcaseLobbyId ? [currentShowcaseLobbyId.toString()] : [];
+        return this.findOldestRoomsExcluding(lobbies, count, excludeIds);
+    }
+    
+    // 找到最老的N个挂机房间（排除多个展示房间）
+    findOldestRoomsExcluding(lobbies, count, excludeLobbyIds) {
+        const excludeSet = new Set(excludeLobbyIds.filter(id => id));
         const targetGameId = this.settings.custom_game_id;
         
-        // 过滤掉当前展示房间，并按创建时间排序（最老的在前）
+        // 过滤掉展示房间，并按创建时间排序（最老的在前）
         const sortedLobbies = lobbies
             .filter(lobby => {
                 // 过滤游戏ID，只保留当前游戏的房间
@@ -803,8 +885,8 @@ class ShowcaseManager {
                 if (gameId !== targetGameId) return false;
                 
                 const lobbyIdStr = lobby.lobbyId?.toString();
-                // 排除当前展示房间
-                if (lobbyIdStr === currentShowcaseId) return false;
+                // 排除所有展示房间
+                if (excludeSet.has(lobbyIdStr)) return false;
                 // 只保留有密码的房间（挂机房间通常有密码）
                 return lobby.hasPassKey === true;
             })
@@ -907,9 +989,13 @@ class ShowcaseManager {
 
     getStatus() {
         const currentBot = this.bots[this.currentActiveIndex];
+        const botA = this.bots[0];
+        const botB = this.bots[1];
         return {
             currentActive: `主号${currentBot.label}`,
             currentLobbyId: currentBot.currentLobbyId?.toString() || '无',
+            lobbyA: botA.currentLobbyId ? `${botA.currentLobbyId.toString().slice(-6)}(${this.getRoomAge(botA)}m)` : '无',
+            lobbyB: botB.currentLobbyId ? `${botB.currentLobbyId.toString().slice(-6)}(${this.getRoomAge(botB)}m)` : '无',
             roomAge: this.getRoomAge(currentBot),
             rotationCount: this.rotationCount,
             nextRotation: `${this.rotationCycleMinutes}分钟周期`
@@ -993,7 +1079,7 @@ setInterval(async () => {
     const status = manager.getStatus();
     const lobbyCount = await manager.queryGameLobbyCount();
     const lobbyCountStr = lobbyCount >= 0 ? `${lobbyCount}` : '查询中';
-    logInfo('Status', `活跃: ${status.currentActive} | 房间: ${status.currentLobbyId} | 存活: ${status.roomAge}分钟 | 轮换次数: ${status.rotationCount} | 游廊房间: ${lobbyCountStr}`);
+    logInfo('Status', `活跃: ${status.currentActive} | 房间A: ${status.lobbyA} | 房间B: ${status.lobbyB} | 轮换: ${status.rotationCount}次 | 游廊: ${lobbyCountStr}个`);
 }, 60000);
 
 // 异常处理

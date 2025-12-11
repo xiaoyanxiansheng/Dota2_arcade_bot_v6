@@ -103,35 +103,9 @@
                         <span class="font-medium">挂机车队</span>
                         <span :class="status.farming ? 'bg-green-500' : 'bg-red-500'" class="w-2 h-2 rounded-full"></span>
                     </div>
-                    <div class="flex space-x-2 mb-2">
+                    <div class="flex space-x-2">
                         <button @click="toggleProcess('farming', 'start')" :disabled="status.farming" class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">启动</button>
                         <button @click="toggleProcess('farming', 'stop')" :disabled="!status.farming" class="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">停止</button>
-                    </div>
-                    <!-- 进度显示：仅运行时显示 -->
-                    <div v-if="status.farming && farmingProgress" class="border-t border-gray-600 pt-2 mt-2">
-                        <!-- 当前配置名称 -->
-                        <div class="flex justify-between items-center mb-2">
-                            <span class="text-xs text-blue-400 font-bold">📦 {{ farmingProgress.currentConfig || '-' }}</span>
-                            <span class="text-xs text-gray-400">配置 {{ farmingProgress.currentConfigIndex + 1 }}/{{ farmingProgress.totalConfigs }}</span>
-                        </div>
-                        
-                        <!-- 进度条 -->
-                        <div class="relative h-6 bg-gray-600 rounded-full overflow-hidden mb-2 shadow-inner">
-                            <div class="absolute inset-0 progress-bar progress-stripes transition-all duration-500 ease-out rounded-full" 
-                                 :style="{ width: farmingProgress.percent + '%' }"></div>
-                            <div class="absolute inset-0 flex items-center justify-center text-xs font-bold text-white" style="text-shadow: 0 1px 2px rgba(0,0,0,0.5);">
-                                {{ farmingProgress.configProgress }}/{{ farmingProgress.configTotal }} ({{ farmingProgress.percent }}%)
-                            </div>
-                        </div>
-                        
-                        <!-- 详细信息 -->
-                        <div class="grid grid-cols-2 gap-1 text-xs">
-                            <div class="flex justify-between text-gray-400"><span>🚪 房间:</span><span class="text-white">{{ farmingProgress.configRooms || 0 }}</span></div>
-                            <div class="flex justify-between text-gray-400"><span>⏱️ 时长:</span><span class="text-yellow-400 font-bold">{{ formatElapsed(farmingProgress.configElapsed) }}</span></div>
-                        </div>
-                        
-                        <!-- 跳过按钮 -->
-                        <button @click="skipFarmingConfig" class="w-full bg-yellow-600 hover:bg-yellow-700 text-xs py-1.5 rounded mt-2 font-medium">⏭️ 跳过当前配置</button>
                     </div>
                 </div>
 
@@ -144,19 +118,47 @@
                 <div class="border-t border-gray-700 my-2"></div>
                 <div class="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">工具箱</div>
 
-                <!-- 订阅地图 -->
-                <button @click="runTool('subscribe_map')" :disabled="toolStatus.running" class="w-full bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-xs py-2 rounded mb-2 flex items-center justify-center">
-                    <span v-if="toolStatus.running && toolStatus.name === 'Subscribe Maps'" class="animate-spin mr-2">⏳</span>
-                    🗺️ 批量订阅地图
-                </button>
+                <!-- 游戏ID输入（放最上面，多个工具共用） -->
+                <div class="mb-3">
+                    <label class="text-xs text-gray-400 block mb-1">🎮 游戏ID (测试项目:{{ queryGameId || '未设置' }})</label>
+                    <input v-model="toolGameId" placeholder="留空使用默认" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs">
+                </div>
+
+                <!-- 批量订阅地图 -->
+                <div class="mb-3">
+                    <label class="text-xs text-gray-400 block mb-1">🗺️ 批量订阅地图</label>
+                    <select v-model="subscribeConfigName" :disabled="toolStatus.running && toolStatus.name === 'Subscribe Maps'" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-1">
+                        <option value="">-- 选择配置 --</option>
+                        <option v-for="cfg in farmConfigs" :key="cfg.name" :value="cfg.name">{{ cfg.name }} ({{ cfg.followers }}人)</option>
+                    </select>
+                    <!-- 两个按钮并排：订阅 + 停止 -->
+                    <div class="flex space-x-2">
+                        <button @click="subscribeMap()" :disabled="toolStatus.running || !subscribeConfigName" class="flex-1 bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-xs py-1.5 rounded flex items-center justify-center">
+                            <span v-if="toolStatus.running && toolStatus.name === 'Subscribe Maps'" class="animate-spin mr-1">⏳</span>
+                            订阅
+                        </button>
+                        <button type="button" 
+                                onclick="fetch('/api/tool/stop',{method:'POST'}).then(r=>r.json()).then(d=>console.log('停止结果:',d)).catch(e=>console.error(e))"
+                                :disabled="!(toolStatus.running && toolStatus.name === 'Subscribe Maps')"
+                                class="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:bg-gray-600 text-xs py-1.5 rounded">
+                            停止
+                        </button>
+                    </div>
+                </div>
 
                 <!-- 查询房间 -->
-                <div class="space-y-2">
-                    <label class="text-xs text-gray-400">查询房间 (测试项目:{{ queryGameId || '全部' }})</label>
-                    <input v-model="searchGameId" placeholder="留空查所有" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs">
-                    <button @click="runTool('list_lobbies', { gameId: searchGameId })" :disabled="toolStatus.running" class="w-full bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-xs py-1 rounded flex items-center justify-center">
+                <div class="mb-3">
+                    <button @click="runTool('list_lobbies', { gameId: toolGameId })" :disabled="toolStatus.running" class="w-full bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-xs py-1.5 rounded flex items-center justify-center">
                         <span v-if="toolStatus.running && toolStatus.name === 'List Lobbies'" class="animate-spin mr-2">⏳</span>
-                        🔍 查询
+                        🔍 查询房间 (留空查询所有)
+                    </button>
+                </div>
+
+                <!-- 代理测试 -->
+                <div class="mb-3">
+                    <button @click="runTool('test_proxies')" :disabled="toolStatus.running" class="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-xs py-1.5 rounded flex items-center justify-center">
+                        <span v-if="toolStatus.running && toolStatus.name === 'Test Proxies'" class="animate-spin mr-2">⏳</span>
+                        🔌 测试代理可用性
                     </button>
                 </div>
 
@@ -177,12 +179,12 @@
                         运行日志 <span class="ml-1 text-xs">▼</span>
                     </button>
                     <div class="absolute left-0 top-full bg-gray-700 rounded shadow-lg z-20 hidden group-hover:block min-w-max">
-                        <button @click="currentTab = 'log_all'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_all' ? 'text-blue-400' : 'text-gray-200'">📋 全部日志</button>
                         <button @click="currentTab = 'log_showcase'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_showcase' ? 'text-blue-400' : 'text-gray-200'">🎭 展示车队</button>
                         <button @click="currentTab = 'log_farming'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_farming' ? 'text-blue-400' : 'text-gray-200'">🌾 挂机车队</button>
                         <button @click="currentTab = 'log_cleanup'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_cleanup' ? 'text-blue-400' : 'text-gray-200'">🧹 清理日志</button>
                         <button @click="currentTab = 'log_subscribe'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_subscribe' ? 'text-blue-400' : 'text-gray-200'">🗺️ 订阅日志</button>
                         <button @click="currentTab = 'log_query'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_query' ? 'text-blue-400' : 'text-gray-200'">🔍 查询日志</button>
+                        <button @click="currentTab = 'log_proxy'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_proxy' ? 'text-blue-400' : 'text-gray-200'">🔌 代理测试</button>
                     </div>
                 </div>
                 <button @click="loadConfig('showcase')" :class="currentTab === 'config_showcase' ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'" class="px-4 py-3 border-b-2 font-medium text-sm transition">展示配置</button>
@@ -200,14 +202,55 @@
                         <button @click="clearCurrentLogs" class="text-xs text-gray-500 hover:text-white">清空日志</button>
                     </div>
                     
-                    <!-- Stats 固定显示区（仅挂机日志） - 总体统计 -->
+                    <!-- Stats 固定显示区（仅挂机日志） - v4.0 详细统计 -->
                     <div v-if="currentTab === 'log_farming' && farmingProgress" class="bg-gray-800 border border-blue-500/50 rounded p-3 mb-2 text-sm">
-                        <div class="flex items-center flex-wrap gap-x-4 gap-y-1">
-                            <span class="text-blue-400 font-bold">📊 总体统计</span>
-                            <span class="text-gray-300">配置: <span class="text-white">{{ farmingProgress.currentConfigIndex + 1 }}/{{ farmingProgress.totalConfigs }}</span></span>
-                            <span class="text-gray-300">总进度: <span class="text-green-400 font-bold">{{ farmingTotalInLobby + farmingProgress.configProgress }}/{{ farmingTotalFollowers }} ({{ Math.round((farmingTotalInLobby + farmingProgress.configProgress) / farmingTotalFollowers * 100) || 0 }}%)</span></span>
-                            <span class="text-gray-300">总房间: <span class="text-white">{{ farmingProgress.roomsCreated }}</span></span>
-                            <span class="text-gray-300">总时长: <span class="text-yellow-400 font-bold">{{ formatElapsed(farmingTotalElapsed) }}</span></span>
+                        <!-- 第一行：小号状态 -->
+                        <div class="flex items-center flex-wrap gap-x-3 gap-y-1 mb-1">
+                            <span class="text-blue-400 font-bold">📊 挂机统计</span>
+                            <span class="text-gray-400">总:<span class="text-white font-bold">{{ farmingProgress.total }}</span></span>
+                            <span class="text-gray-400">✅入:<span class="text-green-400 font-bold">{{ farmingProgress.inLobby }}</span></span>
+                            <span class="text-gray-400">⏳加:<span class="text-yellow-400">{{ farmingProgress.assigned }}</span></span>
+                            <span class="text-gray-400">💤池:<span class="text-cyan-400">{{ farmingProgress.poolIdle }}</span></span>
+                            <span class="text-gray-400">🔄登:<span class="text-blue-300">{{ farmingProgress.loggingIn }}</span></span>
+                            <span class="text-gray-400">📋队列:<span class="text-orange-400">{{ farmingProgress.queueLength }}</span></span>
+                        </div>
+                        <!-- 第二行：房间/主号/时间 -->
+                        <div class="flex items-center flex-wrap gap-x-3 gap-y-1 text-xs border-t border-gray-700 pt-1">
+                            <span class="text-gray-400">🚪房间:<span class="text-white">{{ farmingProgress.roomsCreated }}</span></span>
+                            <span class="text-gray-400">👑主号:<span class="text-purple-400">{{ farmingProgress.leadersActive }}/{{ farmingProgress.leadersTotal }}</span></span>
+                            <span class="text-gray-400">📦配置:<span class="text-gray-300">{{ farmingProgress.loadedConfigs?.join(', ') || 'config_000' }}</span></span>
+                            <span class="text-gray-400">⏱️时长:<span class="text-yellow-400 font-bold">{{ formatElapsed(farmingTotalElapsed) }}</span></span>
+                            <span class="text-gray-400">进度:<span class="text-green-400 font-bold">{{ farmingProgress.percent }}%</span></span>
+                        </div>
+                    </div>
+                    
+                    <!-- Stats 固定显示区（仅订阅日志） - v6.0 池子模式 -->
+                    <div v-if="currentTab === 'log_subscribe' && subscribeProgress" class="bg-gray-800 border border-green-500/50 rounded p-3 mb-2 text-sm">
+                        <div class="flex items-center flex-wrap gap-x-3 gap-y-1">
+                            <span class="text-green-400 font-bold">📦 订阅统计</span>
+                            <span class="text-gray-400">总:<span class="text-white font-bold">{{ subscribeProgress.total }}</span></span>
+                            <span class="text-gray-400">✅成功:<span class="text-green-400 font-bold">{{ subscribeProgress.success }}</span></span>
+                            <span class="text-gray-400">🏊池子:<span class="text-cyan-400">{{ subscribeProgress.pool }}</span></span>
+                            <span class="text-gray-400">⏳处理:<span class="text-yellow-400">{{ subscribeProgress.processing }}</span></span>
+                            <span class="text-gray-400">进度:<span class="text-green-400 font-bold">{{ subscribeProgress.percent }}%</span></span>
+                            <span class="text-gray-400">⏱️时长:<span class="text-yellow-400 font-bold">{{ subscribeProgress.elapsed }}s</span></span>
+                        </div>
+                    </div>
+                    
+                    <!-- Stats 固定显示区（仅代理测试日志） -->
+                    <div v-if="currentTab === 'log_proxy' && proxyProgress" class="bg-gray-800 border border-orange-500/50 rounded p-3 mb-2 text-sm">
+                        <div class="flex items-center flex-wrap gap-x-3 gap-y-1">
+                            <span class="text-orange-400 font-bold">🔌 代理测试</span>
+                            <span class="text-gray-400">总:<span class="text-white font-bold">{{ proxyProgress.total }}</span></span>
+                            <span class="text-gray-400">✅成功:<span class="text-green-400 font-bold">{{ proxyProgress.success }}</span></span>
+                            <span class="text-gray-400">❌失败:<span class="text-red-400 font-bold">{{ proxyProgress.failed }}</span></span>
+                            <span class="text-gray-400">⏳测试中:<span class="text-yellow-400">{{ proxyProgress.pending }}</span></span>
+                            <span class="text-gray-400">进度:<span class="text-green-400 font-bold">{{ proxyProgress.percent }}%</span></span>
+                            <span class="text-gray-400">成功率:<span class="text-cyan-400 font-bold">{{ proxyProgress.successRate }}%</span></span>
+                            <span class="text-gray-400">⏱️时长:<span class="text-yellow-400 font-bold">{{ proxyProgress.elapsed }}s</span></span>
+                            <button @click="replaceProxies()" class="ml-auto bg-green-600 hover:bg-green-500 text-white text-xs px-3 py-1 rounded">
+                                ✅ 替换代理配置
+                            </button>
                         </div>
                     </div>
                     
@@ -246,16 +289,11 @@
                             <button @click="saveFarmConfig()" class="bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 rounded">保存修改</button>
                         </div>
                     </div>
-                    <div class="flex-1 flex gap-4 min-h-0">
+                    <div class="flex-1 flex flex-col min-h-0">
                         <!-- 小号列表 -->
                         <div class="flex-1 flex flex-col">
                             <label class="text-xs text-gray-400 mb-1">🎮 小号列表 (followers.txt)</label>
                             <textarea v-model="farmFollowersContent" placeholder="用户名,密码&#10;用户名,密码&#10;..." class="flex-1 bg-gray-800 border border-gray-700 rounded p-3 font-mono text-xs resize-none focus:outline-none focus:border-blue-500"></textarea>
-                        </div>
-                        <!-- 代理列表 -->
-                        <div class="w-1/3 flex flex-col">
-                            <label class="text-xs text-gray-400 mb-1">🌐 代理列表 (proxies.txt)</label>
-                            <textarea v-model="farmProxiesContent" placeholder="http://user:pass@host:port&#10;..." class="flex-1 bg-gray-800 border border-gray-700 rounded p-3 font-mono text-xs resize-none focus:outline-none focus:border-blue-500"></textarea>
                         </div>
                     </div>
                 </div>
@@ -263,7 +301,7 @@
                 <!-- Farm 配置列表 Tab -->
                 <div v-show="currentTab === 'farm_configs'" class="h-full flex flex-col p-4">
                     <div class="flex justify-between items-center mb-4">
-                        <h2 class="text-lg font-semibold text-white">📁 Farm 配置列表</h2>
+                        <h2 class="text-lg font-semibold text-white">📁 Farm 配置列表 <span class="text-xs text-gray-400 font-normal">(v4.0: 代理已移至主号配置)</span></h2>
                         <div class="flex space-x-2">
                             <button @click="refreshFarmConfigs" class="bg-gray-600 hover:bg-gray-500 text-white text-xs px-3 py-1 rounded">🔄 刷新</button>
                             <button @click="addFarmConfig" class="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1 rounded">➕ 添加配置</button>
@@ -275,7 +313,7 @@
                                 <tr>
                                     <th class="text-left px-4 py-2 text-gray-400">配置名</th>
                                     <th class="text-right px-4 py-2 text-gray-400">小号数</th>
-                                    <th class="text-right px-4 py-2 text-gray-400">代理数</th>
+                                    <th class="text-center px-4 py-2 text-gray-400">状态</th>
                                     <th class="text-center px-4 py-2 text-gray-400">操作</th>
                                 </tr>
                             </thead>
@@ -283,12 +321,18 @@
                                 <tr v-for="cfg in farmConfigs" :key="cfg.name" class="border-b border-gray-700 hover:bg-gray-800/50">
                                     <td class="px-4 py-3">
                                         <span class="font-mono">{{ cfg.name }}</span>
-                                        <span v-if="farmingProgress && farmingProgress.currentConfig === cfg.name" class="ml-2 text-xs bg-green-600 px-1 rounded">运行中</span>
                                     </td>
                                     <td class="px-4 py-3 text-right text-gray-300">{{ cfg.followers }}</td>
-                                    <td class="px-4 py-3 text-right text-gray-300">{{ cfg.proxies }}</td>
                                     <td class="px-4 py-3 text-center">
+                                        <span v-if="cfg.name === 'config_000'" class="text-xs bg-blue-600 px-2 py-0.5 rounded">默认</span>
+                                        <span v-else-if="loadedFarmConfigs.has(cfg.name)" class="text-xs bg-green-600 px-2 py-0.5 rounded">已加入</span>
+                                        <span v-else class="text-xs bg-gray-600 px-2 py-0.5 rounded">未加入</span>
+                                    </td>
+                                    <td class="px-4 py-3 text-center space-x-2">
                                         <button @click="editFarmConfig(cfg.name)" class="text-blue-400 hover:text-blue-300 text-xs">编辑</button>
+                                        <button v-if="cfg.name !== 'config_000' && !loadedFarmConfigs.has(cfg.name) && status.farming" 
+                                                @click="addConfigToPool(cfg.name)" 
+                                                class="text-green-400 hover:text-green-300 text-xs">加入池子</button>
                                     </td>
                                 </tr>
                                 <tr v-if="farmConfigs.length === 0">
@@ -333,18 +377,26 @@
             setup() {
                 const status = ref({ showcase: false, farming: false });
                 const toolStatus = ref({ running: false, name: null });
-                const logs = ref([]);
-                const currentTab = ref('log_all');
+                
+                // 独立日志数组（每个分页独立管理，避免互相挤占）
+                const showcaseLogs = ref([]);
+                const farmingLogs = ref([]);
+                const cleanupLogs = ref([]);
+                const subscribeLogs = ref([]);
+                const queryLogs = ref([]);
+                const proxyLogs = ref([]);  // 代理测试日志
+                const LOG_LIMIT = 1000;  // 每个分页的日志上限
+                
+                const currentTab = ref('log_farming');
                 const logContainer = ref(null);
                 const farmingStats = ref(null); // 挂机车队实时状态（总体）
                 const farmingProgress = ref(null); // 挂机车队进度信息
+                const subscribeProgress = ref(null); // 订阅进度信息
+                const proxyProgress = ref(null); // 代理测试进度信息
                 let farmingElapsedTimer = null;   // 时间更新定时器
                 let farmingTotalStartTime = null; // 总运行开始时间
                 const farmingTotalElapsed = ref(0); // 总运行时间（秒）
-                const farmingTotalInLobby = ref(0); // 总进入房间人数
-                const farmingTotalFollowers = ref(0); // 总小号数量（累计）
-                const processedConfigs = new Set(); // 已处理的配置（防止重复累加）
-                let configStartRooms = 0; // 当前配置开始时的总房间数
+                const farmingTotalFollowers = ref(0); // 总小号数量
                 
                 // 配置编辑
                 const configContent = ref('');
@@ -354,10 +406,13 @@
                 // Farm 配置列表
                 const farmConfigs = ref([]);
                 const editingFarmConfig = ref(null);
+                const loadedFarmConfigs = ref(new Set(['config_000'])); // 已加入池子的配置（默认 config_000）
 
                 // 工具参数
                 const searchGameId = ref('');
                 const queryGameId = ref('');
+                const toolGameId = ref('');           // 工具箱共用的游戏ID
+                const subscribeConfigName = ref('');  // 订阅用的配置名
 
                 // 领队列表
                 const showcaseLeaders = ref([]);
@@ -381,56 +436,94 @@
                 // 日志页签标题
                 const logTabTitle = computed(() => {
                     const titles = {
-                        'log_all': '📋 全部日志',
                         'log_showcase': '🎭 展示车队日志',
                         'log_farming': '🌾 挂机车队日志',
                         'log_cleanup': '🧹 清理日志',
                         'log_subscribe': '🗺️ 订阅日志',
-                        'log_query': '🔍 查询日志'
+                        'log_query': '🔍 查询日志',
+                        'log_proxy': '🔌 代理测试日志'
                     };
                     return titles[currentTab.value] || '系统日志';
                 });
 
-                // 过滤日志
+                // 直接返回对应分页的日志数组
                 const filteredLogs = computed(() => {
-                    const tab = currentTab.value;
-                    if (tab === 'log_all') return logs.value;
-                    
-                    return logs.value.filter(log => {
-                        const src = log.source.toLowerCase();
-                        const msg = log.message.toLowerCase();
-                        switch (tab) {
-                            case 'log_showcase':
-                                // 展示车队：包括 showcase 和 showcase-cleanup
-                                return src === 'showcase' || src === 'showcase-cleanup' ||
-                                       (src === 'system' && msg.includes('showcase'));
-                            case 'log_farming':
-                                // 挂机车队：包括 farming 和 farming-cleanup
-                                return src === 'farming' || src === 'farming-cleanup' ||
-                                       (src === 'system' && msg.includes('farming'));
-                            case 'log_cleanup':
-                                // 清理日志：只显示「清理所有进程」的日志
-                                return src === 'clear_all' || src === 'clear-all' ||
-                                       (src === 'system' && msg.includes('清理所有'));
-                            case 'log_subscribe':
-                                return src === 'subscribe' || src === 'subscribe_map' ||
-                                       (src === 'system' && msg.includes('订阅'));
-                            case 'log_query':
-                                return src === 'tool' || src === 'list_lobbies' ||
-                                       (src === 'system' && msg.includes('查询'));
-                            default:
-                                return true;
-                        }
-                    });
+                    switch (currentTab.value) {
+                        case 'log_showcase': return showcaseLogs.value;
+                        case 'log_farming': return farmingLogs.value;
+                        case 'log_cleanup': return cleanupLogs.value;
+                        case 'log_subscribe': return subscribeLogs.value;
+                        case 'log_query': return queryLogs.value;
+                        case 'log_proxy': return proxyLogs.value;
+                        default: return farmingLogs.value;
+                    }
                 });
+                
+                // 判断日志属于哪个分页（根据 source 精确匹配）
+                const getLogCategory = (log) => {
+                    const src = log.source.toLowerCase();
+                    const msg = log.message.toLowerCase();
+                    
+                    // 展示车队
+                    if (src === 'showcase' || src === 'showcase-cleanup' ||
+                        (src === 'system' && msg.includes('showcase'))) {
+                        return 'showcase';
+                    }
+                    // 挂机车队
+                    if (src === 'farming' || src === 'farming-cleanup' || src === 'stats' ||
+                        (src === 'system' && msg.includes('farming'))) {
+                        return 'farming';
+                    }
+                    // 清理日志
+                    if (src === 'clear_all' || src === 'clear-all' ||
+                        (src === 'system' && msg.includes('清理所有'))) {
+                        return 'cleanup';
+                    }
+                    // 订阅日志（精确匹配 source）
+                    if (src === 'subscribe_map' ||
+                        (src === 'system' && msg.includes('subscribe_map'))) {
+                        return 'subscribe';
+                    }
+                    // 查询日志（精确匹配 source）
+                    if (src === 'list_lobbies' ||
+                        (src === 'system' && msg.includes('list_lobbies'))) {
+                        return 'query';
+                    }
+                    // 代理测试日志（精确匹配 source）
+                    if (src === 'test_proxies' ||
+                        (src === 'system' && msg.includes('test_proxies'))) {
+                        return 'proxy';
+                    }
+                    // 默认归入挂机车队
+                    return 'farming';
+                };
+                
+                // 将日志添加到对应分页
+                const addLog = (log) => {
+                    const category = getLogCategory(log);
+                    let targetLogs;
+                    switch (category) {
+                        case 'showcase': targetLogs = showcaseLogs; break;
+                        case 'farming': targetLogs = farmingLogs; break;
+                        case 'cleanup': targetLogs = cleanupLogs; break;
+                        case 'subscribe': targetLogs = subscribeLogs; break;
+                        case 'query': targetLogs = queryLogs; break;
+                        case 'proxy': targetLogs = proxyLogs; break;
+                        default: targetLogs = farmingLogs;
+                    }
+                    targetLogs.value.push(log);
+                    if (targetLogs.value.length > LOG_LIMIT) targetLogs.value.shift();
+                };
 
                 // 清空当前页签日志
                 const clearCurrentLogs = () => {
-                    if (currentTab.value === 'log_all') {
-                        logs.value = [];
-                    } else {
-                        // 只保留不属于当前页签的日志
-                        logs.value = logs.value.filter(log => !filteredLogs.value.includes(log));
+                    switch (currentTab.value) {
+                        case 'log_showcase': showcaseLogs.value = []; break;
+                        case 'log_farming': farmingLogs.value = []; break;
+                        case 'log_cleanup': cleanupLogs.value = []; break;
+                        case 'log_subscribe': subscribeLogs.value = []; break;
+                        case 'log_query': queryLogs.value = []; break;
+                        case 'log_proxy': proxyLogs.value = []; break;
                     }
                 };
 
@@ -448,47 +541,39 @@
                 // Socket 监听
                 onMounted(() => {
                     socket.on('log', (log) => {
-                        logs.value.push(log);
-                        if (logs.value.length > 1000) logs.value.shift();
+                        addLog(log);  // 分发到对应分页
                         scrollToBottom();
                         
-                        // 提取挂机车队 Stats 信息
-                        // 日志格式: [时间][Stats] [config_000] 进度: 50/999 (5%) | 房间: 3 | 配置: 1/1 | 运行: 5分30秒
-                        if (log.source === 'farming' && log.message.includes('进度:') && log.message.includes('配置:')) {
-                            // 更宽松的正则，支持 config_XXX 或 - 作为配置名
-                            const match = log.message.match(/\[(config_\d+|-)\]\s*进度:\s*(\d+)\/(\d+)\s*\((\d+)%\)/);
-                            const roomMatch = log.message.match(/房间:\s*(\d+)/);
-                            const cfgMatch = log.message.match(/配置:\s*(\d+)\/(\d+)/);
+                        // 提取挂机车队 Stats 信息 (v5.0 流水线模式)
+                        // 日志格式: 总:300 ✅入:16 ⏳加:1 💤池:283 🔄登:0 📋队列:0 | 🚪房:3 👑主:1/1 | ⏱️2分7秒 (5%)
+                        if (log.source === 'farming' && log.message.includes('总:') && log.message.includes('✅入:')) {
+                            const totalMatch = log.message.match(/总:(\d+)/);
+                            const inLobbyMatch = log.message.match(/✅入:(\d+)/);
+                            const assignedMatch = log.message.match(/⏳加:(\d+)/);
+                            const poolMatch = log.message.match(/💤池:(\d+)/);
+                            const loggingInMatch = log.message.match(/🔄登:(\d+)/);
+                            const queueMatch = log.message.match(/📋队列:(\d+)/);
+                            const roomMatch = log.message.match(/🚪房:(\d+)/);
+                            const leaderMatch = log.message.match(/👑主:(\d+)\/(\d+)/);
+                            const percentMatch = log.message.match(/\((\d+)%\)/);
                             
-                            if (match && cfgMatch) {
-                                const newConfigName = match[1];
-                                const configChanged = farmingProgress.value?.currentConfig !== newConfigName;
-                                const currentInLobby = parseInt(match[2]);
-                                const currentTotal = parseInt(match[3]);
-                                const totalRooms = roomMatch ? parseInt(roomMatch[1]) : 0;
-                                
-                                // 配置切换时：累加上一个配置的进入人数，记录房间基准
-                                if (configChanged && farmingProgress.value) {
-                                    farmingTotalInLobby.value += farmingProgress.value.configProgress || 0;
-                                    configStartRooms = totalRooms; // 新配置开始时的房间数
-                                }
-                                
-                                // 计算当前配置的房间数
-                                const configRooms = totalRooms - configStartRooms;
-                                
+                            if (totalMatch && inLobbyMatch) {
                                 farmingProgress.value = {
-                                    currentConfig: newConfigName,
-                                    configProgress: currentInLobby,
-                                    configTotal: currentTotal,
-                                    percent: parseInt(match[4]),
-                                    roomsCreated: totalRooms,      // 总房间数（顶部统计用）
-                                    configRooms: configRooms,      // 当前配置房间数（侧边栏用）
-                                    currentConfigIndex: parseInt(cfgMatch[1]) - 1,
-                                    totalConfigs: parseInt(cfgMatch[2]),
-                                    // 配置变化时重置开始时间，否则保留
-                                    configStartTime: configChanged ? Date.now() : (farmingProgress.value?.configStartTime || Date.now()),
-                                    configElapsed: configChanged ? 0 : (farmingProgress.value?.configElapsed || 0)
+                                    total: parseInt(totalMatch[1]),
+                                    inLobby: parseInt(inLobbyMatch[1]),
+                                    assigned: assignedMatch ? parseInt(assignedMatch[1]) : 0,
+                                    poolIdle: poolMatch ? parseInt(poolMatch[1]) : 0,
+                                    loggingIn: loggingInMatch ? parseInt(loggingInMatch[1]) : 0,
+                                    queueLength: queueMatch ? parseInt(queueMatch[1]) : 0,
+                                    roomsCreated: roomMatch ? parseInt(roomMatch[1]) : 0,
+                                    leadersActive: leaderMatch ? parseInt(leaderMatch[1]) : 0,
+                                    leadersTotal: leaderMatch ? parseInt(leaderMatch[2]) : 0,
+                                    percent: percentMatch ? parseInt(percentMatch[1]) : 0,
+                                    loadedConfigs: loadedFarmConfigs.value ? Array.from(loadedFarmConfigs.value) : ['config_000']
                                 };
+                                
+                                // 更新总数
+                                farmingTotalFollowers.value = parseInt(totalMatch[1]);
                             }
                         }
                         
@@ -499,6 +584,64 @@
                             farmingStats.value = null;
                             farmingProgress.value = null;
                         }
+                        
+                        // 解析订阅统计日志 - v6.0 池子模式
+                        // [Stats] 总:2000 | ✅成功:123 | 🏊池子:1800 | ⏳处理:77 | 进度:6.4% | ⏱️30s
+                        if (log.source === 'subscribe_map' && log.message.includes('[Stats]')) {
+                            const totalMatch = log.message.match(/总:(\d+)/);
+                            const successMatch = log.message.match(/成功:(\d+)/);
+                            const poolMatch = log.message.match(/池子:(\d+)/);
+                            const processingMatch = log.message.match(/处理:(\d+)/);
+                            const percentMatch = log.message.match(/进度:([\d.]+)%/);
+                            const elapsedMatch = log.message.match(/⏱️(\d+)s/);
+                            
+                            if (totalMatch) {
+                                subscribeProgress.value = {
+                                    total: parseInt(totalMatch[1]),
+                                    success: successMatch ? parseInt(successMatch[1]) : 0,
+                                    pool: poolMatch ? parseInt(poolMatch[1]) : 0,
+                                    processing: processingMatch ? parseInt(processingMatch[1]) : 0,
+                                    percent: percentMatch ? percentMatch[1] : '0',
+                                    elapsed: elapsedMatch ? elapsedMatch[1] : '0'
+                                };
+                            }
+                        }
+                        
+                        // 解析代理测试统计日志
+                        // [Stats] 总:2500 | ✅成功:2000 | ❌失败:300 | ⏳测试中:200 | 进度:92.0% | ⏱️120s
+                        if (log.source === 'test_proxies' && log.message.includes('[Stats]')) {
+                            const totalMatch = log.message.match(/总:(\d+)/);
+                            const successMatch = log.message.match(/成功:(\d+)/);
+                            const failedMatch = log.message.match(/失败:(\d+)/);
+                            const pendingMatch = log.message.match(/测试中:(\d+)/);
+                            const percentMatch = log.message.match(/进度:([\d.]+)%/);
+                            const elapsedMatch = log.message.match(/⏱️(\d+)s/);
+                            
+                            if (totalMatch) {
+                                const total = parseInt(totalMatch[1]);
+                                const success = successMatch ? parseInt(successMatch[1]) : 0;
+                                const completed = success + (failedMatch ? parseInt(failedMatch[1]) : 0);
+                                const successRate = completed > 0 ? ((success / completed) * 100).toFixed(1) : '0';
+                                
+                                proxyProgress.value = {
+                                    total: total,
+                                    success: success,
+                                    failed: failedMatch ? parseInt(failedMatch[1]) : 0,
+                                    pending: pendingMatch ? parseInt(pendingMatch[1]) : 0,
+                                    percent: percentMatch ? percentMatch[1] : '0',
+                                    successRate: successRate,
+                                    elapsed: elapsedMatch ? elapsedMatch[1] : '0'
+                                };
+                            }
+                        }
+                        
+                        // 工具进程退出时清除进度
+                        if (log.source === 'System' && log.message.includes('subscribe_map 进程已退出')) {
+                            subscribeProgress.value = null;
+                        }
+                        if (log.source === 'System' && log.message.includes('test_proxies 进程已退出')) {
+                            proxyProgress.value = null;
+                        }
                     });
 
                     socket.on('status', (newStatus) => {
@@ -508,23 +651,10 @@
                         if (newStatus.farming === true && !farmingElapsedTimer) {
                             farmingTotalStartTime = Date.now();
                             farmingTotalElapsed.value = 0;
-                            farmingTotalInLobby.value = 0;
                             farmingTotalFollowers.value = 0;
-                            processedConfigs.clear();
-                            configStartRooms = 0;
-                            
-                            // 启动时获取所有配置的总小号数
-                            fetch('/api/farm/configs').then(r => r.json()).then(data => {
-                                if (data.configs && data.configs.length > 0) {
-                                    farmingTotalFollowers.value = data.configs.reduce((sum, cfg) => sum + (cfg.followers || 0), 0);
-                                }
-                            }).catch(() => {});
+                            loadedFarmConfigs.value = new Set(['config_000']); // 重置已加载配置
                             
                             farmingElapsedTimer = setInterval(() => {
-                                // 更新当前配置时间
-                                if (farmingProgress.value && farmingProgress.value.configStartTime) {
-                                    farmingProgress.value.configElapsed = Math.floor((Date.now() - farmingProgress.value.configStartTime) / 1000);
-                                }
                                 // 更新总运行时间
                                 if (farmingTotalStartTime) {
                                     farmingTotalElapsed.value = Math.floor((Date.now() - farmingTotalStartTime) / 1000);
@@ -564,6 +694,20 @@
 
                     // 加载领队列表
                     loadLeaders();
+                    
+                    // 原生事件监听：停止订阅按钮（解决 Vue 事件绑定问题）
+                    document.addEventListener('click', async (e) => {
+                        if (e.target && (e.target.id === 'stopSubscribeBtn' || e.target.closest('#stopSubscribeBtn'))) {
+                            console.log('[DEBUG] 停止订阅按钮被点击');
+                            try {
+                                const resp = await fetch('/api/tool/stop', { method: 'POST' });
+                                const data = await resp.json();
+                                console.log('[DEBUG] stopTool response:', resp.status, data);
+                            } catch (err) {
+                                console.error('停止工具失败:', err);
+                            }
+                        }
+                    });
                 });
 
                 // API 调用
@@ -573,7 +717,45 @@
                     try {
                         await fetch(`/api/process/${name}/${action}`, { method: 'POST' });
                     } catch (e) {
-                        logs.value.push({ timestamp: '', source: 'System', message: `API Error: ${e.message}`, type: 'error' });
+                        addLog({ timestamp: '', source: 'System', message: `API Error: ${e.message}`, type: 'error' });
+                    }
+                };
+
+                // 订阅地图（单独方法，确保参数正确传递）
+                const subscribeMap = () => {
+                    const configName = subscribeConfigName.value;
+                    const gameId = toolGameId.value;
+                    console.log('subscribeMap:', configName, gameId);
+                    runTool('subscribe_map', { configName, gameId });
+                };
+                
+                // 停止工具
+                const stopTool = async () => {
+                    console.log('[DEBUG] stopTool called');
+                    try {
+                        const resp = await fetch('/api/tool/stop', { method: 'POST' });
+                        const data = await resp.json();
+                        console.log('[DEBUG] stopTool response:', resp.status, data);
+                    } catch (e) {
+                        console.error('停止工具失败:', e);
+                    }
+                };
+                
+                // 替换代理配置（用测试成功的代理）
+                const replaceProxies = async () => {
+                    if (!confirm(`确定要用测试成功的代理替换 config_leaders.json 中的代理列表吗？\n\n成功代理数: ${proxyProgress.value?.success || 0}`)) {
+                        return;
+                    }
+                    try {
+                        const resp = await fetch('/api/proxy/replace', { method: 'POST' });
+                        const data = await resp.json();
+                        if (data.success) {
+                            alert(`✅ 替换成功！\n\n原代理数: ${data.originalCount}\n新代理数: ${data.newCount}`);
+                        } else {
+                            alert('❌ 替换失败: ' + data.error);
+                        }
+                    } catch (e) {
+                        alert('❌ 请求失败: ' + e.message);
                     }
                 };
 
@@ -585,8 +767,10 @@
                         currentTab.value = 'log_subscribe';
                     } else if (name === 'list_lobbies') {
                         currentTab.value = 'log_query';
+                    } else if (name === 'test_proxies') {
+                        currentTab.value = 'log_proxy';
                     } else {
-                        currentTab.value = 'log_all';
+                        currentTab.value = 'log_farming';
                     }
                     try {
                         const res = await fetch(`/api/tool/${name}`, {
@@ -682,9 +866,8 @@
                     }
                 };
 
-                // Farm 配置编辑（新格式：文本）
+                // Farm 配置编辑（v4.0: 只有 followers）
                 const farmFollowersContent = ref('');
-                const farmProxiesContent = ref('');
                 
                 const editFarmConfig = async (name) => {
                     currentTab.value = 'config_farm';
@@ -695,10 +878,8 @@
                         const res = await fetch(`/api/farm/config/${name}`);
                         const data = await res.json();
                         farmFollowersContent.value = data.followers || '';
-                        farmProxiesContent.value = data.proxies || '';
                     } catch (e) {
                         farmFollowersContent.value = '// 加载失败';
-                        farmProxiesContent.value = '';
                     }
                 };
                 
@@ -709,8 +890,7 @@
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
-                                followers: farmFollowersContent.value,
-                                proxies: farmProxiesContent.value
+                                followers: farmFollowersContent.value
                             })
                         });
                         
@@ -725,12 +905,20 @@
                     }
                 };
 
-                // 跳过当前配置
-                const skipFarmingConfig = async () => {
-                    if (!confirm('确定跳过当前配置？')) return;
+                // 将配置加入小号池子 (v4.0 新增)
+                const addConfigToPool = async (configName) => {
+                    if (!confirm(`确定将 ${configName} 的小号加入池子？`)) return;
                     try {
-                        const res = await fetch('/api/farm/skip', { method: 'POST' });
-                        if (!res.ok) {
+                        const res = await fetch('/api/farm/add_to_pool', { 
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ configName })
+                        });
+                        if (res.ok) {
+                            loadedFarmConfigs.value.add(configName);
+                            // 触发响应式更新
+                            loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                        } else {
                             const err = await res.json();
                             alert('操作失败: ' + err.error);
                         }
@@ -811,22 +999,24 @@
                 };
 
                 return {
-                    status, toolStatus, logs, currentTab, logContainer,
-                    toggleProcess, runTool, formatMessage,
+                    status, toolStatus, currentTab, logContainer,
+                    toggleProcess, runTool, subscribeMap, stopTool, formatMessage,
                     configContent, loadConfig, saveConfig, saveMessage,
-                    searchGameId, queryGameId,
+                    searchGameId, queryGameId, toolGameId, subscribeConfigName,
                     showcaseLeaders, selectedShowcaseLeader,
                     loadLeaders, verifyLeader,
                     steamGuardVisible, steamGuardDomain, steamGuardCode, 
                     submitSteamGuard, cancelSteamGuard,
-                    // 日志页签相关
+                    // 日志页签相关（独立数组）
                     logTabTitle, filteredLogs, clearCurrentLogs, farmingStats,
-                    farmingTotalElapsed, farmingTotalInLobby, farmingTotalFollowers,
+                    farmingTotalElapsed, farmingTotalFollowers,
                     // Farm 配置相关
-                    farmConfigs, farmingProgress, editingFarmConfig,
-                    farmFollowersContent, farmProxiesContent,
+                    farmConfigs, farmingProgress, editingFarmConfig, loadedFarmConfigs,
+                    farmFollowersContent,
                     refreshFarmConfigs, showFarmConfigs, addFarmConfig, editFarmConfig,
-                    saveFarmConfig, skipFarmingConfig, formatElapsed
+                    saveFarmConfig, addConfigToPool, formatElapsed,
+                    // 工具进度
+                    subscribeProgress, proxyProgress, replaceProxies
                 };
             }
         }).mount('#app');
