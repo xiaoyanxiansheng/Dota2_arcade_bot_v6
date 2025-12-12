@@ -1,0 +1,146 @@
+[2025-12-12T11:47:17.811Z] [INFO] [System] 📄 配置文件: C:\Users\wanggang\Desktop\dota2_arcade_bot_v6_0\dota2_arcade_bot_v6_0\config\config_showcase.json
+[2025-12-12T11:47:17.812Z] [INFO] [Section] Dota2 展示车队 v1.0
+[2025-12-12T11:47:17.812Z] [INFO] [System] 模式: 生产模式
+[2025-12-12T11:47:17.813Z] [INFO] [System] 游戏ID: 3586896069
+[2025-12-12T11:47:17.813Z] [INFO] [System] 轮换周期: 20 分钟
+[2025-12-12T11:47:17.814Z] [INFO] [Section] 展示车队启动
+[2025-12-12T11:47:17.814Z] [INFO] [Showcase] 展示主号A: sncr_1029
+[2025-12-12T11:47:17.815Z] [INFO] [Showcase] 展示主号B: a02821145
+[2025-12-12T11:47:17.817Z] [INFO] [Showcase] 轮换周期: 20 分钟
+[2025-12-12T11:47:17.818Z] [INFO] [展示主号A] 使用代理: http://lrkksoef:47592sgxxc1k@82.22.224.200:7532
+[2025-12-12T11:47:17.819Z] [INFO] [展示主号B] 使用代理: http://lrkksoef:47592sgxxc1k@82.22.224.200:7532
+[2025-12-12T11:47:17.819Z] [INFO] [展示主号B] 使用代理: http://lrkksoef:47592sgxxc1k@82.22.224.200:7532
+[2025-12-12T11:47:17.820Z] [INFO] [Showcase] 🚀 启动展示主号A，创建初始公开房...
+[2025-12-12T11:47:17.821Z] [INFO] [Showcase] ⏱️ 轮换定时器已启动
+[2025-12-12T11:47:17.821Z] [INFO] [Showcase]    下次轮换: 20 分钟后
+[2025-12-12T11:48:17.837Z] [ERROR] [Showcase] 展示主号A GC连接超时
+[2025-12-12T11:48:17.838Z] [INFO] [Status] 活跃: 主号A | 房间A: 无 | 房间B: 无 | 轮换: 0次 | 游廊: 查询中个
+[2025-12-12T11:49:17.846Z] [INFO] [Status] 活跃: 主号A | 房间A: 无 | 房间B: 无 | 轮换: 0次 | 游廊: 查询中个
+[2025-12-12T11:49:45.989Z] [INFO] [System] 📄 配置文件: C:\Users\wanggang\Desktop\dota2_arcade_bot_v6_0\dota2_arcade_bot_v6_0\config\config_showcase.json
+[2025-12-12T11:49:45.990Z] [INFO] [Section] Dota2 展示车队 v1.0
+[2025-12-12T11:49:45.990Z] [INFO] [System] 模式: 生产模式
+[2025-12-12T11:49:45.991Z] [INFO] [System] 游戏ID: 3586896069
+[2025-12-12T11:49:45.991Z] [INFO] [System] 轮换周期: 20 分钟
+[2025-12-12T11:49:45.992Z] [INFO] [Section] 展示车队启动
+[2025-12-12T11:49:45.992Z] [INFO] [Showcase] 展示主号A: sncr_1029
+[2025-12-12T11:49:45.993Z] [INFO] [Showcase] 展示主号B: a02821145
+[2025-12-12T11:49:45.993Z] [INFO] [Showcase] 轮换周期: 20 分钟
+[2025-12-12T11:49:45.994Z] [INFO] [展示主号B] 使用代理: http://lrkksoef:47592sgxxc1k@82.22.224.200:7532
+[2025-12-12T11:49:45.995Z] [INFO] [展示主号B] 使用代理: http://lrkksoef:47592sgxxc1k@82.22.224.200:7532
+[2025-12-12T11:49:45.995Z] [INFO] [Showcase] 🚀 启动展示主号A，创建初始公开房...
+[2025-12-12T11:49:45.996Z] [INFO] [Showcase] ⏱️ 轮换定时器已启动
+[2025-12-12T11:49:45.997Z] [INFO] [Showcase]    下次轮换: 20 分钟后
+[2025-12-12T11:49:53.032Z] [INFO] [Showcase] 展示主号A GC已连接，创建公开房...
+[2025-12-12T11:49:55.182Z] [SUCCESS] [展示主号A] 公开房创建成功: 29620540132306094 | 人数: 1
+[2025-12-12T11:50:46.950Z] [INFO] [Status] 活跃: 主号A | 房间A: 306094(0m) | 房间B: 无 | 轮换: 0次 | 游廊: 1个
+[2025-12-12T11:51:46.520Z] [INFO] [Status] 活跃: 主号A | 房间A: 306094(1m) | 房间B: 无 | 轮换: 0次 | 游廊: 1个
+[2025-12-12T11:52:46.567Z] [INFO] [Status] 活跃: 主号A | 房间A: 306094(2m) | 房间B: 无 | 轮换: 0次 | 游廊: 1个
+[2025-12-12T11:53:46.638Z] [INFO] [Status] 活跃: 主号A | 房间A: 306094(3m) | 房间B: 无 | 轮换: 0次 | 游廊: 1个
+[2025-12-12T11:54:07.737Z] [INFO] [Section] 收到退出命令
+[2025-12-12T11:54:07.738Z] [INFO] [Showcase] 🧹 清理资源...
+[2025-12-12T11:54:07.740Z] [SUCCESS] [Showcase] 展示车队已停止
+[2025-12-12T11:54:10.748Z] [SUCCESS] [System] 程序已安全退出
+[2025-12-12T12:14:47.128Z] [INFO] [System] 📄 配置文件: C:\Users\wanggang\Desktop\dota2_arcade_bot_v6_0\dota2_arcade_bot_v6_0\config\config_showcase.json
+[2025-12-12T12:14:47.129Z] [INFO] [Section] Dota2 展示车队 v1.0
+[2025-12-12T12:14:47.130Z] [INFO] [System] 模式: 生产模式
+[2025-12-12T12:14:47.130Z] [INFO] [System] 游戏ID: 3586896069
+[2025-12-12T12:14:47.131Z] [INFO] [System] 轮换周期: 20 分钟
+[2025-12-12T12:14:47.131Z] [INFO] [Section] 展示车队启动
+[2025-12-12T12:14:47.132Z] [INFO] [Showcase] 展示主号A: a02821145
+[2025-12-12T12:14:47.132Z] [INFO] [Showcase] 展示主号B: CriticalStrikeStudio
+[2025-12-12T12:14:47.132Z] [INFO] [Showcase] 轮换周期: 20 分钟
+[2025-12-12T12:14:47.134Z] [INFO] [Showcase] 🚀 启动展示主号A，创建初始公开房...
+[2025-12-12T12:14:47.135Z] [INFO] [Showcase] ⏱️ 轮换定时器已启动
+[2025-12-12T12:14:47.135Z] [INFO] [Showcase]    下次轮换: 20 分钟后
+[2025-12-12T12:14:55.392Z] [INFO] [Section] 收到退出命令
+[2025-12-12T12:14:55.392Z] [INFO] [Showcase] 🧹 清理资源...
+[2025-12-12T12:14:55.393Z] [SUCCESS] [Showcase] 展示车队已停止
+[2025-12-12T12:14:58.407Z] [SUCCESS] [System] 程序已安全退出
+[2025-12-12T12:23:26.256Z] [INFO] [System] 📄 配置文件: C:\Users\wanggang\Desktop\dota2_arcade_bot_v6_0\dota2_arcade_bot_v6_0\config\config_showcase.json
+[2025-12-12T12:23:26.257Z] [INFO] [Section] Dota2 展示车队 v1.0
+[2025-12-12T12:23:26.257Z] [INFO] [System] 模式: 生产模式
+[2025-12-12T12:23:26.258Z] [INFO] [System] 游戏ID: 3586896069
+[2025-12-12T12:23:26.258Z] [INFO] [System] 轮换周期: 20 分钟
+[2025-12-12T12:23:26.259Z] [INFO] [Section] 展示车队启动
+[2025-12-12T12:23:26.259Z] [INFO] [Showcase] 展示主号A: a02821145
+[2025-12-12T12:23:26.259Z] [INFO] [Showcase] 展示主号B: CriticalStrikeStudio
+[2025-12-12T12:23:26.260Z] [INFO] [Showcase] 轮换周期: 20 分钟
+[2025-12-12T12:23:26.261Z] [INFO] [Showcase] 🚀 启动展示主号A，创建初始公开房...
+[2025-12-12T12:23:26.262Z] [INFO] [Showcase] ⏱️ 轮换定时器已启动
+[2025-12-12T12:23:26.263Z] [INFO] [Showcase]    下次轮换: 20 分钟后
+[2025-12-12T12:23:28.638Z] [INFO] [Section] 收到退出命令
+[2025-12-12T12:23:28.639Z] [INFO] [Showcase] 🧹 清理资源...
+[2025-12-12T12:23:28.639Z] [SUCCESS] [Showcase] 展示车队已停止
+[2025-12-12T12:23:31.642Z] [SUCCESS] [System] 程序已安全退出
+[2025-12-12T12:25:36.763Z] [INFO] [System] 📄 配置文件: C:\Users\wanggang\Desktop\dota2_arcade_bot_v6_0\dota2_arcade_bot_v6_0\config\config_showcase.json
+[2025-12-12T12:25:36.763Z] [INFO] [Section] Dota2 展示车队 v1.0
+[2025-12-12T12:25:36.764Z] [INFO] [System] 模式: 生产模式
+[2025-12-12T12:25:36.764Z] [INFO] [System] 游戏ID: 3586896069
+[2025-12-12T12:25:36.765Z] [INFO] [System] 轮换周期: 20 分钟
+[2025-12-12T12:25:36.765Z] [INFO] [Section] 展示车队启动
+[2025-12-12T12:25:36.766Z] [INFO] [Showcase] 展示主号A: a02821145
+[2025-12-12T12:25:36.766Z] [INFO] [Showcase] 展示主号B: CriticalStrikeStudio
+[2025-12-12T12:25:36.766Z] [INFO] [Showcase] 轮换周期: 20 分钟
+[2025-12-12T12:25:36.768Z] [INFO] [Showcase] 🚀 启动展示主号A，创建初始公开房...
+[2025-12-12T12:25:36.769Z] [INFO] [Showcase] ⏱️ 轮换定时器已启动
+[2025-12-12T12:25:36.769Z] [INFO] [Showcase]    下次轮换: 20 分钟后
+[2025-12-12T12:25:41.817Z] [INFO] [Showcase] 展示主号A GC已连接，创建公开房...
+[2025-12-12T12:25:43.860Z] [SUCCESS] [展示主号A] 公开房创建成功: 29620540160374521 | 人数: 1
+[2025-12-12T12:25:47.503Z] [INFO] [Section] 收到退出命令
+[2025-12-12T12:25:47.503Z] [INFO] [Showcase] 🧹 清理资源...
+[2025-12-12T12:25:47.506Z] [SUCCESS] [Showcase] 展示车队已停止
+[2025-12-12T12:25:50.520Z] [SUCCESS] [System] 程序已安全退出
+[2025-12-12T12:39:37.464Z] [INFO] [System] 📄 配置文件: C:\Users\wanggang\Desktop\dota2_arcade_bot_v6_0\dota2_arcade_bot_v6_0\config\config_showcase.json
+[2025-12-12T12:39:37.464Z] [INFO] [Section] Dota2 展示车队 v1.0
+[2025-12-12T12:39:37.465Z] [INFO] [System] 模式: 生产模式
+[2025-12-12T12:39:37.465Z] [INFO] [System] 游戏ID: 3586896069
+[2025-12-12T12:39:37.466Z] [INFO] [System] 轮换周期: 20 分钟
+[2025-12-12T12:39:37.466Z] [INFO] [Section] 展示车队启动
+[2025-12-12T12:39:37.467Z] [INFO] [Showcase] 展示主号A: CriticalStrikeStudio
+[2025-12-12T12:39:37.467Z] [INFO] [Showcase] 展示主号B: a02821145
+[2025-12-12T12:39:37.467Z] [INFO] [Showcase] 轮换周期: 20 分钟
+[2025-12-12T12:39:37.469Z] [INFO] [Showcase] 🚀 启动展示主号A，创建初始公开房...
+[2025-12-12T12:39:37.470Z] [INFO] [Showcase] ⏱️ 轮换定时器已启动
+[2025-12-12T12:39:37.470Z] [INFO] [Showcase]    下次轮换: 20 分钟后
+[2025-12-12T12:39:49.600Z] [INFO] [Showcase] 展示主号A GC已连接，创建公开房...
+[2025-12-12T12:39:51.969Z] [SUCCESS] [展示主号A] 公开房创建成功: 29620540172004031 | 人数: 1
+[2025-12-12T12:39:55.429Z] [INFO] [Section] 收到退出命令
+[2025-12-12T12:39:55.430Z] [INFO] [Showcase] 🧹 清理资源...
+[2025-12-12T12:39:55.432Z] [SUCCESS] [Showcase] 展示车队已停止
+[2025-12-12T12:39:58.434Z] [SUCCESS] [System] 程序已安全退出
+[2025-12-12T12:41:37.583Z] [INFO] [System] 📄 配置文件: C:\Users\wanggang\Desktop\dota2_arcade_bot_v6_0\dota2_arcade_bot_v6_0\config\config_showcase.json
+[2025-12-12T12:41:37.584Z] [INFO] [Section] Dota2 展示车队 v1.0
+[2025-12-12T12:41:37.584Z] [INFO] [System] 模式: 生产模式
+[2025-12-12T12:41:37.585Z] [INFO] [System] 游戏ID: 3586896069
+[2025-12-12T12:41:37.585Z] [INFO] [System] 轮换周期: 20 分钟
+[2025-12-12T12:41:37.586Z] [INFO] [Section] 展示车队启动
+[2025-12-12T12:41:37.586Z] [INFO] [Showcase] 展示主号A: CriticalStrikeStudio
+[2025-12-12T12:41:37.587Z] [INFO] [Showcase] 展示主号B: a02821145
+[2025-12-12T12:41:37.587Z] [INFO] [Showcase] 轮换周期: 20 分钟
+[2025-12-12T12:41:37.588Z] [INFO] [Showcase] 🚀 启动展示主号A，创建初始公开房...
+[2025-12-12T12:41:37.589Z] [INFO] [Showcase] ⏱️ 轮换定时器已启动
+[2025-12-12T12:41:37.589Z] [INFO] [Showcase]    下次轮换: 20 分钟后
+[2025-12-12T12:41:44.672Z] [INFO] [Showcase] 展示主号A GC已连接，创建公开房...
+[2025-12-12T12:41:46.341Z] [SUCCESS] [展示主号A] 公开房创建成功: 29620540173609073 | 人数: 1
+[2025-12-12T12:42:27.765Z] [INFO] [Section] 收到退出命令
+[2025-12-12T12:42:27.766Z] [INFO] [Showcase] 🧹 清理资源...
+[2025-12-12T12:42:27.768Z] [SUCCESS] [Showcase] 展示车队已停止
+[2025-12-12T12:42:30.781Z] [SUCCESS] [System] 程序已安全退出
+[2025-12-12T12:45:28.841Z] [INFO] [System] 📄 配置文件: C:\Users\wanggang\Desktop\dota2_arcade_bot_v6_0\dota2_arcade_bot_v6_0\config\config_showcase.json
+[2025-12-12T12:45:28.841Z] [INFO] [Section] Dota2 展示车队 v1.0
+[2025-12-12T12:45:28.842Z] [INFO] [System] 模式: 生产模式
+[2025-12-12T12:45:28.842Z] [INFO] [System] 游戏ID: 3586896069
+[2025-12-12T12:45:28.843Z] [INFO] [System] 轮换周期: 20 分钟
+[2025-12-12T12:45:28.843Z] [INFO] [Section] 展示车队启动
+[2025-12-12T12:45:28.844Z] [INFO] [Showcase] 展示主号A: CriticalStrikeStudio
+[2025-12-12T12:45:28.844Z] [INFO] [Showcase] 展示主号B: a02821145
+[2025-12-12T12:45:28.844Z] [INFO] [Showcase] 轮换周期: 20 分钟
+[2025-12-12T12:45:28.845Z] [INFO] [展示主号A] 使用代理: http://lrkksoef:47592sgxxc1k@82.22.224.200:7532
+[2025-12-12T12:45:28.846Z] [INFO] [展示主号B] 使用代理: http://lrkksoef:47592sgxxc1k@82.22.224.200:7532
+[2025-12-12T12:45:28.846Z] [INFO] [Showcase] 🚀 启动展示主号A，创建初始公开房...
+[2025-12-12T12:45:28.847Z] [INFO] [Showcase] ⏱️ 轮换定时器已启动
+[2025-12-12T12:45:28.848Z] [INFO] [Showcase]    下次轮换: 20 分钟后
+[2025-12-12T12:45:29.869Z] [INFO] [Section] 收到退出命令
+[2025-12-12T12:45:29.869Z] [INFO] [Showcase] 🧹 清理资源...
+[2025-12-12T12:45:29.875Z] [SUCCESS] [Showcase] 展示车队已停止
+[2025-12-12T12:45:32.887Z] [SUCCESS] [System] 程序已安全退出

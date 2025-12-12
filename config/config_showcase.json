@@ -18,22 +18,18 @@
   },
   "showcase_leaders": [
     {
-      "username": "a02821145",
-      "password": "Wuxianqiyuan2025",
-      "shared_secret": "",
-      "proxy": "http://lrkksoef:47592sgxxc1k@82.22.224.200:7532"
-    },
-    {
       "username": "CriticalStrikeStudio",
       "password": "MarCsStudio2023",
-      "shared_secret": "",
-      "proxy": "http://lrkksoef:47592sgxxc1k@82.22.224.200:7532"
+      "proxy": "http://lrkksoef:47592sgxxc1k@188.68.1.154:6023"
+    },
+    {
+      "username": "a02821145",
+      "password": "Wuxianqiyuan2025",
+      "proxy": "http://lrkksoef:47592sgxxc1k@188.68.1.154:6023"
     }
   ],
   "query_account": {
     "username": "hkinzkccm679426",
-    "password": "8m4Xf4xShad3",
-    "shared_secret": "",
-    "proxy": "http://lrkksoef:47592sgxxc1k@82.22.224.200:7532"
+    "password": "8m4Xf4xShad3"
   }
 }

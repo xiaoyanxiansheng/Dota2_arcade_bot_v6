@@ -271,6 +271,14 @@ class FollowerPool {
             if (this.idle.length % 50 === 0) {
                 logInfo('Pool', `📥 池子小号: ${this.idle.length} 个`);
             }
+            
+            // 🔴 新增：如果有主号在等待小号，通知它们
+            if (this.waitingLeaders.length > 0) {
+                const callback = this.waitingLeaders.shift();
+                if (callback) {
+                    setImmediate(() => callback());
+                }
+            }
         }
     }
 
@@ -450,7 +458,21 @@ class FollowerBot {
     }
 
     setupListeners() {
+        // 🔴 Steam Guard 验证回调
+        this.client.on('steamGuard', (domain, callback, lastCodeWrong) => {
+            if (this.account.shared_secret && this.account.shared_secret.length > 5) {
+                const code = SteamTotp.generateAuthCode(this.account.shared_secret);
+                callback(code);
+            } else {
+                // 没有 shared_secret，无法自动验证，放回队列
+                this.cleanup();
+                this.state = FollowerState.PENDING;
+                this.pool.loginQueue.push(this);
+            }
+        });
+
         this.client.on('loggedOn', () => {
+            if (!this.client) return;  // 🔴 防止超时清理后延迟触发
             this.retryCount = 0;
             this.loggedInElsewhereRetry = 0;  // 登录成功，重置计数器
             this.client.setPersona(SteamUser.EPersonaState.Online);
@@ -458,6 +480,7 @@ class FollowerBot {
         });
 
         this.client.on('appLaunched', (appid) => {
+            if (!this.client) return;  // 🔴 防止超时清理后延迟触发
             if (appid === this.settings.target_app_id) {
                 setTimeout(() => this.connectGC(), 1000);
             }
@@ -473,14 +496,17 @@ class FollowerBot {
     }
 
     connectGC() {
+        if (!this.client) return;  // 🔴 防止超时清理后延迟触发
         this.sendHello();
         const helloInterval = setInterval(() => { 
+            if (!this.client) { clearInterval(helloInterval); return; }  // 🔴 client 被清理则停止
             if (!this.is_gc_connected) this.sendHello(); 
             else clearInterval(helloInterval);
         }, 5000);
     }
 
     sendHello() {
+        if (!this.client) return;  // 🔴 防止超时清理后延迟触发
         try {
             const payload = { client_session_id: 0, engine: 2, client_launcher: 0 };
             const message = CMsgClientHello.create(payload);
@@ -568,8 +594,10 @@ class FollowerBot {
                 }
                 
                 // 清理残留状态
-                this.client.sendToGC(this.settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
-                this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                if (this.client) {  // 🔴 防止清理后延迟触发
+                    this.client.sendToGC(this.settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                    this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                }
                 
                 // 登录成功 → 进入池子（状态1→状态2）
                 setTimeout(() => {
@@ -681,7 +709,9 @@ class FollowerBot {
             
             const message = CMsgPracticeLobbyJoin.create(payload);
             const buffer = CMsgPracticeLobbyJoin.encode(message).finish();
-            this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyJoin | k_EMsgProtoMask, {}, buffer);
+            if (this.client) {  // 🔴 防止清理后延迟触发
+                this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyJoin | k_EMsgProtoMask, {}, buffer);
+            }
         } catch (err) {}
     }
     
@@ -708,6 +738,7 @@ class FollowerBot {
         
         // 设置队伍
         setTimeout(() => {
+            if (!this.client) return;  // 🔴 防止清理后延迟触发
             const teamMsg = CMsgPracticeLobbySetTeamSlot.create({ team: DOTA_GC_TEAM.DOTA_GC_TEAM_GOOD_GUYS, slot: 0 });
             const teamBuf = CMsgPracticeLobbySetTeamSlot.encode(teamMsg).finish();
             this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbySetTeamSlot | k_EMsgProtoMask, {}, teamBuf);
@@ -808,11 +839,13 @@ class FollowerBot {
     // 重连专用监听器（GC连接后直接加入房间，不进池子）
     setupReconnectListeners() {
         this.client.on('loggedOn', () => {
+            if (!this.client) return;  // 🔴 防止清理后延迟触发
             this.client.setPersona(SteamUser.EPersonaState.Online);
             this.client.gamesPlayed([this.settings.target_app_id]);
         });
 
         this.client.on('appLaunched', (appid) => {
+            if (!this.client) return;  // 🔴 防止清理后延迟触发
             if (appid === this.settings.target_app_id) {
                 setTimeout(() => this.connectGCForReconnect(), 1000);
             }
@@ -834,8 +867,10 @@ class FollowerBot {
     }
     
     connectGCForReconnect() {
+        if (!this.client) return;  // 🔴 防止清理后延迟触发
         this.sendHello();
         const helloInterval = setInterval(() => { 
+            if (!this.client) { clearInterval(helloInterval); return; }  // 🔴 client 被清理则停止
             if (!this.is_gc_connected) this.sendHello(); 
             else clearInterval(helloInterval);
         }, 5000);
@@ -849,8 +884,10 @@ class FollowerBot {
             if (!this.is_gc_connected) {
                 this.is_gc_connected = true;
                 // 清理残留状态
-                this.client.sendToGC(this.settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
-                this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                if (this.client) {  // 🔴 防止清理后延迟触发
+                    this.client.sendToGC(this.settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                    this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                }
                 
                 // 直接尝试加入分配的房间（不进池子）
                 setTimeout(() => {
@@ -894,7 +931,9 @@ class FollowerBot {
         
         try {
             // 发送退出房间消息
-            this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
+            if (this.client) {  // 🔴 防止清理后延迟触发
+                this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
+            }
         } catch (err) {
             logWarning('Follower', `${this.account.username} 发送退出消息失败: ${err.message}`);
         }
@@ -909,6 +948,7 @@ class FollowerBot {
     }
 
     sendReadyUp() {
+        if (!this.client) return;  // 🔴 防止清理后延迟触发
         try {
             const payload = {
                 state: DOTALobbyReadyState.DOTALobbyReadyState_READY,
@@ -990,6 +1030,13 @@ class LeaderBot {
         this.ready_up_heartbeat = null;
         this.state = 'OFFLINE';
         this.leaveScheduled = false; // 是否已安排离开
+        this.stopped = false;
+
+        // 🔴 IP 轮换相关
+        this.proxyIndex = 0;
+        this.roomsPerProxy = settings.leader_proxy_rotate_rooms || 100;
+        this.roomsSinceLastRotate = 0;
+        this.isReconnecting = false; // 🔴 防止重复重连
 
         // CRC 数据
         this.knownCrc = "1396649696593898392";
@@ -1000,16 +1047,45 @@ class LeaderBot {
         console.log(`[${formatTime()}] [挂机主号|${this.account.username}] ${msg}`);
     }
 
-    // 从共享代理池随机选择代理
-    selectRandomProxy() {
-        return this.manager.getRandomProxy();
+    // 🔴 获取主号专用代理（轮换选择）
+    selectLeaderProxy() {
+        return this.manager.getLeaderProxy(this.proxyIndex);
+    }
+
+    // 🔴 检查是否需要换 IP
+    shouldRotateProxy() {
+        return this.roomsSinceLastRotate >= this.roomsPerProxy;
+    }
+
+    // 🔴 轮换 IP（需要重新登录）
+    rotateProxyAndRestart() {
+        this.log(`🔄 创建了 ${this.roomsSinceLastRotate} 个房间，换 IP 重新登录...`);
+        this.proxyIndex++;
+        
+        // 🔴 当 proxyIndex 超过主号专用代理数量时，重置为 0，循环使用
+        const leaderProxyCount = this.manager.leaderProxies?.length || 10;
+        if (this.proxyIndex >= leaderProxyCount) {
+            this.proxyIndex = 0;
+            this.log(`🔁 已用完 ${leaderProxyCount} 个专用代理，从头开始循环`);
+        }
+        
+        this.roomsSinceLastRotate = 0;
+        
+        // 清理当前连接
+        this.cleanup();
+        
+        // 5 秒后用新 IP 重新登录
+        setTimeout(() => this.start(), 5000);
     }
 
     start() {
+        this.stopped = false;  // 🔴 重置停止标志，允许后续操作
         this.state = 'LOGGING_IN';
-        this.proxy = this.selectRandomProxy();
+        this.proxy = this.selectLeaderProxy();  // 🔴 使用主号专用代理
         
-        this.log(`🔐 开始登录...`);
+        const proxyNum = this.proxyIndex + 1;
+        const totalProxies = this.manager.leaderProxies.length;
+        this.log(`🔐 开始登录... (专用IP #${proxyNum}/${totalProxies}, 已创建${this.roomsSinceLastRotate}/${this.roomsPerProxy}房间)`);
         if (this.proxy) {
             this.log(`   代理: ${this.proxy.replace(/:[^:@]+@/, ':***@')}`);
         }
@@ -1043,6 +1119,17 @@ class LeaderBot {
     }
 
     setupListeners() {
+        // 🔴 Steam Guard 验证回调（换 IP 时可能触发）
+        this.client.on('steamGuard', (domain, callback, lastCodeWrong) => {
+            if (this.account.shared_secret && this.account.shared_secret.length > 5) {
+                const code = SteamTotp.generateAuthCode(this.account.shared_secret);
+                this.log(`🔐 Steam Guard 验证${lastCodeWrong ? '(重试)' : ''}，自动提供代码...`);
+                callback(code);
+            } else {
+                this.log(`❌ Steam Guard 需要验证码但未配置 shared_secret`);
+            }
+        });
+
         this.client.on('loggedOn', () => {
             this.log('✅ Steam 登录成功');
             this.client.setPersona(SteamUser.EPersonaState.Online);
@@ -1056,10 +1143,21 @@ class LeaderBot {
             }
         });
 
+        // 🔴 新增：监听断开连接事件
+        this.client.on('disconnected', (eresult, msg) => {
+            this.log(`⚠️ Steam 断开连接: ${msg || eresult}`);
+            this.handleDisconnect('disconnected');
+        });
+
+        // 🔴 新增：监听登出事件
+        this.client.on('loggedOff', (eresult, msg) => {
+            this.log(`⚠️ Steam 登出: ${msg || eresult}`);
+            this.handleDisconnect('loggedOff');
+        });
+
         this.client.on('error', (err) => {
-            this.log(`❌ Steam 错误: ${err.message}，5秒后重试...`);
-            this.cleanup();
-            setTimeout(() => this.start(), 5000);
+            this.log(`❌ Steam 错误: ${err.message}`);
+            this.handleDisconnect('error');
         });
 
         this.client.on('receivedFromGC', (appid, msgType, payload) => {
@@ -1067,16 +1165,40 @@ class LeaderBot {
         });
     }
 
+    // 🔴 新增：统一处理断开连接
+    handleDisconnect(reason) {
+        // 🔴 防止重复触发（error 和 disconnected 可能同时触发）
+        if (this.isReconnecting) {
+            return;
+        }
+        this.isReconnecting = true;
+
+        this.log(`🔄 因 ${reason} 断开，5秒后重连...`);
+        this.is_gc_connected = false;
+        this.state = 'DISCONNECTED'; // 🔴 重置状态，防止旧超时检测干扰
+        this.cleanup();
+        
+        setTimeout(() => {
+            this.isReconnecting = false; // 🔴 重置标志
+            if (!this.stopped) {
+                this.start();
+            }
+        }, 5000);
+    }
+
     connectGC() {
+        if (!this.client) return;  // 🔴 防止清理后延迟触发
         this.log('📡 连接 GC...');
         this.sendHello();
         const helloInterval = setInterval(() => { 
+            if (!this.client) { clearInterval(helloInterval); return; }  // 🔴 client 被清理则停止
             if (!this.is_gc_connected) this.sendHello(); 
             else clearInterval(helloInterval);
         }, 5000);
     }
 
     sendHello() {
+        if (!this.client) return;  // 🔴 防止清理后延迟触发
         try {
             const payload = { client_session_id: 0, engine: 2, client_launcher: 0 };
             const message = CMsgClientHello.create(payload);
@@ -1094,7 +1216,9 @@ class LeaderBot {
                 this.is_gc_connected = true;
                 this.log('✅ GC 连接成功');
                 // 清理残留
-                this.client.sendToGC(this.settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                if (this.client) {  // 🔴 防止清理后延迟触发
+                    this.client.sendToGC(this.settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                }
                 setTimeout(() => this.createRoom(), 1000);
             }
         }
@@ -1175,9 +1299,16 @@ class LeaderBot {
     createRoom(isRetry = false) {
         if (this.stopped) return; // 已停止，不再操作
         
+        // 🔴 检查是否需要换 IP（非重试时）
+        if (!isRetry && this.shouldRotateProxy()) {
+            this.rotateProxyAndRestart();
+            return;
+        }
+        
         // 只有非重试时才增加序号
         if (!isRetry) {
             this.roomsCreated++;
+            this.roomsSinceLastRotate++;  // 🔴 增加轮换计数
         }
         
         this.state = 'CREATING';
@@ -1186,7 +1317,7 @@ class LeaderBot {
         this.leaveScheduled = false; // 重置离开标记
         
         const currentRoomNum = this.roomsCreated; // 记录当前房间号用于超时检测
-        this.log(`🏭 创建房间 #${this.roomsCreated}${isRetry ? ' (重试)' : ''}...`);
+        this.log(`🏭 创建房间 #${this.roomsCreated}${isRetry ? ' (重试)' : ''} (IP轮换: ${this.roomsSinceLastRotate}/${this.roomsPerProxy})...`);
         
         try {
             const gameIdLong = Long.fromString(this.settings.custom_game_id, true);
@@ -1222,6 +1353,7 @@ class LeaderBot {
             const message = CMsgPracticeLobbyCreate.create(createPayload);
             const buffer = CMsgPracticeLobbyCreate.encode(message).finish();
             
+            if (!this.client) return;  // 🔴 防止清理后延迟触发
             this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyCreate | k_EMsgProtoMask, {}, buffer);
             
             // 激活心跳
@@ -1239,7 +1371,8 @@ class LeaderBot {
             // 创建超时重试（只有当前房间号没变且还在创建状态时才重试）
             setTimeout(() => {
                 if (this.state === 'CREATING' && !this.currentLobbyId && this.roomsCreated === currentRoomNum) {
-                    this.log('⚠️ 房间创建超时，重试...');
+                    const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+                    this.log(`⚠️ 房间创建超时(30s) | state=${this.state} | gc=${this.is_gc_connected} | proxy=${proxyIp} | room=#${currentRoomNum} → 重试...`);
                     this.createRoom(true); // 标记为重试，不增加序号
                 }
             }, 30000); // 30秒超时
@@ -1314,7 +1447,9 @@ class LeaderBot {
 
     leaveLobby() {
         try {
-            this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
+            if (this.client) {  // 🔴 防止清理后延迟触发
+                this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
+            }
         } catch (err) {}
         
         // 记录离开的房间ID，用于忽略后续的旧房间更新
@@ -1329,6 +1464,7 @@ class LeaderBot {
     }
 
     sendReadyUp() {
+        if (!this.client) return;  // 🔴 防止清理后延迟触发
         try {
             const payload = {
                 state: DOTALobbyReadyState.DOTALobbyReadyState_READY,
@@ -1384,7 +1520,12 @@ class FarmingManager {
     constructor(leadersConfig) {
         this.settings = leadersConfig.global_settings;
         this.leadersConfig = leadersConfig.leaders || [];
-        this.proxies = leadersConfig.proxies || [];  // 共享代理池
+        this.proxies = leadersConfig.proxies || [];  // 全部代理池
+        
+        // 🔴 分离主号专用 IP 池
+        const leaderProxyCount = this.settings.leader_proxy_count || 10;
+        this.leaderProxies = this.proxies.slice(0, leaderProxyCount);  // 前 N 个给主号
+        this.followerProxies = this.proxies.slice(leaderProxyCount);   // 剩余给小号
         
         // 已加载的配置（防止重复加载）
         this.loadedConfigs = new Set();
@@ -1405,10 +1546,26 @@ class FarmingManager {
         this.proxyStats = new Map();  // proxy -> { used, success, failed, activeConnections }
     }
 
-    // 获取随机代理（带统计）
+    // 获取随机代理（带统计）- 小号专用
     getRandomProxy() {
-        if (!this.proxies || this.proxies.length === 0) return null;
-        const proxy = this.proxies[Math.floor(Math.random() * this.proxies.length)];
+        if (!this.followerProxies || this.followerProxies.length === 0) return null;
+        const proxy = this.followerProxies[Math.floor(Math.random() * this.followerProxies.length)];
+        
+        // 初始化统计
+        if (!this.proxyStats.has(proxy)) {
+            this.proxyStats.set(proxy, { used: 0, success: 0, failed: 0, activeConnections: 0 });
+        }
+        const stats = this.proxyStats.get(proxy);
+        stats.used++;
+        stats.activeConnections++;
+        
+        return proxy;
+    }
+    
+    // 🔴 新增：获取主号专用代理（轮换选择）
+    getLeaderProxy(index) {
+        if (!this.leaderProxies || this.leaderProxies.length === 0) return null;
+        const proxy = this.leaderProxies[index % this.leaderProxies.length];
         
         // 初始化统计
         if (!this.proxyStats.has(proxy)) {
@@ -1479,7 +1636,9 @@ class FarmingManager {
         logInfo('System', `Seeding阈值: ${this.settings.seeding_threshold || 5} 人`);
         logInfo('System', `每房间最大人数: ${this.settings.max_players_per_room || 24} 人`);
         logInfo('System', `主号数量: ${this.leadersConfig.length} 个`);
-        logInfo('System', `共享代理池: ${this.proxies.length} 个`);
+        logInfo('System', `代理总数: ${this.proxies.length} 个`);
+        logInfo('System', `  ├─ 主号专用: ${this.leaderProxies.length} 个 (每 ${this.settings.leader_proxy_rotate_rooms || 100} 房间轮换)`);
+        logInfo('System', `  └─ 小号共享: ${this.followerProxies.length} 个`);
         
         // 创建主号Bot
         this.leadersConfig.forEach((leaderAccount, idx) => {
@@ -1558,9 +1717,10 @@ class FarmingManager {
 
     // 登录流水线：智能控制登录速度
     startLoginPipeline() {
-        // 控制参数
-        const MAX_POOL_IDLE = 100;      // 池子空闲超过这个数就暂缓
-        const MAX_LOGGING_IN = 50;      // 同时登录数量上限
+        // 🔴 动态计算控制参数（基于主号数量）
+        const leaderCount = this.leaders.length || 1;
+        const MAX_POOL_IDLE = leaderCount * 100;      // 每个主号配 100 个池子空闲上限
+        const MAX_LOGGING_IN = leaderCount * 50;      // 每个主号配 50 个同时登录上限
         const SLOW_INTERVAL = 1000;     // 暂缓时的检查间隔（1秒）
         const NORMAL_INTERVAL = this.loginInterval; // 正常间隔（100ms）
         
@@ -1576,7 +1736,7 @@ class FarmingManager {
             
             // 控制2：正在登录的太多，等一等
             if (poolStats.loggingIn >= MAX_LOGGING_IN) {
-                // 正在登录的已经50个了，500ms后再检查
+                // 正在登录的已经够多了，500ms后再检查
                 this.loginPipelineTimer = setTimeout(processNext, 500);
                 return;
             }
@@ -1599,7 +1759,7 @@ class FarmingManager {
         
         // 启动流水线
         processNext();
-        logInfo('Farming', `🚀 登录流水线已启动 (智能控制: 池子>${MAX_POOL_IDLE}暂缓, 登录中>${MAX_LOGGING_IN}等待)`);
+        logInfo('Farming', `🚀 登录流水线已启动 (主号${leaderCount}个: 池子>${MAX_POOL_IDLE}暂缓, 登录中>${MAX_LOGGING_IN}等待)`);
     }
 
     getStats() {
