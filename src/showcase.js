@@ -815,14 +815,22 @@ class ShowcaseManager {
             const myLobbyId = bot.currentLobbyId?.toString();
             const inList = myLobbyId ? filteredLobbies.some(l => l.lobbyId?.toString() === myLobbyId) : false;
 
-            logInfo('Showcase', `Presence检查 主号${bot.label}: 当前房间=${myLobbyId || '无'} | 游廊=${lobbyCount} | 阈值=${minLobbyCountForRotation} | 在展示位=${inList ? '是' : '否'}`);
+            // rotation_cycle_minutes：房间“有效活跃统计窗口”（你定义的语义）
+            // 只要房间存在时间超过该阈值，就必须刷新（重新创建新房间），否则就算房间还在也没有展示活跃意义
+            const rotationCycleMinutes = this.settings.rotation_cycle_minutes || 0;
+            const roomAgeMin = this.getRoomAge(bot);
+            const expiredByAge = !!(myLobbyId && rotationCycleMinutes > 0 && roomAgeMin >= rotationCycleMinutes);
+
+            logInfo(
+                'Showcase',
+                `Presence检查 主号${bot.label}: 当前房间=${myLobbyId || '无'} | 游廊=${lobbyCount} | 阈值=${minLobbyCountForRotation} | 在展示位=${inList ? '是' : '否'} | 房龄=${roomAgeMin}m/${rotationCycleMinutes || 0}m`
+            );
 
             // ===== 新增护栏：仅当“连续消失超过 rotation_cycle_minutes”才按“不在列表”触发创建 =====
             if (myLobbyId && inList) {
                 bot.missingSince = 0; // 已看到，清零
             }
             if (myLobbyId && !inList) {
-                const rotationCycleMinutes = this.settings.rotation_cycle_minutes || 0;
                 const missingThresholdMs = rotationCycleMinutes > 0 ? rotationCycleMinutes * 60 * 1000 : 0;
                 const now = Date.now();
                 if (!bot.missingSince) bot.missingSince = now;
@@ -830,15 +838,19 @@ class ShowcaseManager {
                 const missingMinutes = Math.floor(missingMs / 60000);
 
                 // 如果配置了 rotation_cycle_minutes，则“未超过阈值”时不触发创建（稳定优先）
-                if (missingThresholdMs > 0 && missingMs < missingThresholdMs) {
+                // 但如果房龄已过期（expiredByAge），则必须刷新，不能被此护栏挡住
+                if (!expiredByAge && missingThresholdMs > 0 && missingMs < missingThresholdMs) {
                     logInfo('Showcase', `主号${bot.label} 暂时不在展示位（消失${missingMinutes}m<${rotationCycleMinutes}m），等待下轮...`);
                     return;
                 }
                 // 超过阈值：允许按原逻辑继续触发创建
             }
 
-            // 没有房间 或 (消失超过阈值后)不在列表 → 创建新房间 + 结算1个
-            if (!myLobbyId || !inList) {
+            // 没有房间 或 房龄过期(>=rotation_cycle_minutes) 或 (消失超过阈值后)不在列表 → 创建新房间 + 结算1个
+            if (!myLobbyId || expiredByAge || !inList) {
+                if (expiredByAge) {
+                    logInfo('Showcase', `主号${bot.label} 房间已过期(${roomAgeMin}m>=${rotationCycleMinutes}m)，强制刷新创建新房...`);
+                }
                 logInfo('Showcase', `主号${bot.label} 未在展示位，创建新房并结算 1 个最老挂机房...`);
 
                 // 如果有旧房间，先离开（确保“新房”是新的 lobbyId）
