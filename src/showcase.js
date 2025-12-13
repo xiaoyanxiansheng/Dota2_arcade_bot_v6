@@ -271,6 +271,8 @@ class ShowcaseBot {
         this.state = 'OFFLINE'; // OFFLINE -> LOGGING_IN -> ONLINE -> CREATING_LOBBY -> IN_LOBBY
         this.retryCount = 0;
         this.lobbyCreatedAt = null;
+        // Presence mode: 连续“消失(不在展示位)”开始时间（0=未消失）
+        this.missingSince = 0;
 
         // CRC 数据
         this.knownCrc = "1396649696593898392";
@@ -305,6 +307,7 @@ class ShowcaseBot {
         this.is_gc_connected = false;  // 重置GC连接状态
         this.currentLobbyId = null;    // 重置房间ID
         this.lobbyCreatedAt = null;    // 重置房间创建时间
+        this.missingSince = 0;
         
         if (err.message === 'LoggedInElsewhere') {
             this.error(`账号在其他地方登录，已放弃`);
@@ -498,6 +501,7 @@ class ShowcaseBot {
         const oldLobbyId = this.currentLobbyId;
         this.currentLobbyId = null;
         this.lobbyCreatedAt = null;
+        this.missingSince = 0;
         this.state = 'ONLINE';
         
         if (this.ready_up_heartbeat) {
@@ -813,7 +817,27 @@ class ShowcaseManager {
 
             logInfo('Showcase', `Presence检查 主号${bot.label}: 当前房间=${myLobbyId || '无'} | 游廊=${lobbyCount} | 阈值=${minLobbyCountForRotation} | 在展示位=${inList ? '是' : '否'}`);
 
-            // 没有房间 或 不在列表 → 创建新房间 + 结算1个
+            // ===== 新增护栏：仅当“连续消失超过 rotation_cycle_minutes”才按“不在列表”触发创建 =====
+            if (myLobbyId && inList) {
+                bot.missingSince = 0; // 已看到，清零
+            }
+            if (myLobbyId && !inList) {
+                const rotationCycleMinutes = this.settings.rotation_cycle_minutes || 0;
+                const missingThresholdMs = rotationCycleMinutes > 0 ? rotationCycleMinutes * 60 * 1000 : 0;
+                const now = Date.now();
+                if (!bot.missingSince) bot.missingSince = now;
+                const missingMs = now - bot.missingSince;
+                const missingMinutes = Math.floor(missingMs / 60000);
+
+                // 如果配置了 rotation_cycle_minutes，则“未超过阈值”时不触发创建（稳定优先）
+                if (missingThresholdMs > 0 && missingMs < missingThresholdMs) {
+                    logInfo('Showcase', `主号${bot.label} 暂时不在展示位（消失${missingMinutes}m<${rotationCycleMinutes}m），等待下轮...`);
+                    return;
+                }
+                // 超过阈值：允许按原逻辑继续触发创建
+            }
+
+            // 没有房间 或 (消失超过阈值后)不在列表 → 创建新房间 + 结算1个
             if (!myLobbyId || !inList) {
                 logInfo('Showcase', `主号${bot.label} 未在展示位，创建新房并结算 1 个最老挂机房...`);
 
