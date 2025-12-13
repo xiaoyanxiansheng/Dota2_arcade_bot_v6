@@ -17,6 +17,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const PORT = 3000;
 const PROJECT_ROOT = path.join(__dirname, '..');
+const DATA_DIR = path.join(PROJECT_ROOT, 'data');
 
 // 进程管理
 const processes = {
@@ -100,6 +101,7 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT, logSource = null) 
         // 如果是工具脚本，清除当前工具状态
         if (key === 'tool') {
             processes.tool.name = null;
+            processes.tool.logSource = null;
             io.emit('toolStatus', { running: false, name: null });
         }
     });
@@ -417,10 +419,14 @@ app.get('/api/proxies', (req, res) => {
 // 列出 CSV 文件
 app.get('/api/csv_files', (req, res) => {
     try {
-        const files = fs.readdirSync(PROJECT_ROOT)
+        // CSV 统一存放到 data/ 目录
+        if (!fs.existsSync(DATA_DIR)) {
+            fs.mkdirSync(DATA_DIR, { recursive: true });
+        }
+        const files = fs.readdirSync(DATA_DIR)
             .filter(f => f.startsWith('lobbies_') && f.endsWith('.csv'))
             .map(f => {
-                const stat = fs.statSync(path.join(PROJECT_ROOT, f));
+                const stat = fs.statSync(path.join(DATA_DIR, f));
                 return {
                     name: f,
                     size: stat.size,
@@ -438,7 +444,11 @@ app.get('/api/csv_files', (req, res) => {
 app.get('/api/csv/:filename', (req, res) => {
     try {
         const filename = req.params.filename;
-        const filepath = path.join(PROJECT_ROOT, filename);
+        // CSV 统一存放到 data/ 目录
+        if (!fs.existsSync(DATA_DIR)) {
+            fs.mkdirSync(DATA_DIR, { recursive: true });
+        }
+        const filepath = path.join(DATA_DIR, filename);
         if (fs.existsSync(filepath) && filename.startsWith('lobbies_') && filename.endsWith('.csv')) {
             res.download(filepath);
         } else {
@@ -548,6 +558,14 @@ app.post('/api/tool/:name', (req, res) => {
         const username = body.username || '';
         args = ['commands/login_leader.js', type, username];
         processes.tool.name = `Login Leader: ${username}`;
+        // ✅ 修复“展示验证日志跑到挂机日志”的问题：
+        // 前端根据 source 分类；showcase 验证必须归到展示日志分页。
+        // type: 'showcase' | 'leaders' (旧) | 其他（默认归挂机）
+        if (type === 'showcase') {
+            processes.tool.logSource = 'showcase';
+        } else {
+            processes.tool.logSource = 'farming';
+        }
         
     } else if (name === 'subscribe_map') {
         // 订阅地图: 可选 configName 和 gameId
@@ -578,8 +596,8 @@ app.post('/api/tool/:name', (req, res) => {
     }
 
     io.emit('toolStatus', { running: true, name: processes.tool.name });
-    // 用具体的工具名作为日志 source
-    const logSource = name;  // subscribe_map, list_lobbies, test_proxies, etc.
+    // 用具体的工具名作为日志 source（login_leader 例外：按 type 归类）
+    const logSource = processes.tool.logSource || name;  // subscribe_map, list_lobbies, test_proxies, etc.
     const success = startProcess('tool', cmd, args, PROJECT_ROOT, logSource);
     res.json({ success });
 });

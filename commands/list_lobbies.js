@@ -7,6 +7,7 @@ const path = require('path');
 
 // 1. 路径配置
 const projectRoot = path.join(__dirname, '..');
+const dataDir = path.join(projectRoot, 'data');
 
 // 2. 辅助定义
 const RegionNameMap = {
@@ -240,7 +241,10 @@ client.on('receivedFromGC', (appid, msgType, payload) => {
             const minute = String(now.getMinutes()).padStart(2, '0');
             const second = String(now.getSeconds()).padStart(2, '0');
             const filename = `lobbies_${year}${month}${day}_${hour}${minute}${second}.csv`;
-            const filepath = path.join(projectRoot, filename);
+            if (!fs.existsSync(dataDir)) {
+                fs.mkdirSync(dataDir, { recursive: true });
+            }
+            const filepath = path.join(dataDir, filename);
             
             fs.writeFileSync(filepath, csvRows.join('\n'));
             console.log(`\n💾 [FILE_LINK]${filepath}`);
