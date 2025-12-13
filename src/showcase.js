@@ -821,18 +821,31 @@ class ShowcaseManager {
             const roomAgeMin = this.getRoomAge(bot);
             const expiredByAge = !!(myLobbyId && rotationCycleMinutes > 0 && roomAgeMin >= rotationCycleMinutes);
 
+            // ===== 紧急协调检查：如果两个主号都不在展示位，跳过稳定护栏 =====
+            const otherBot = bot === this.bots[0] ? this.bots[1] : this.bots[0];
+            const otherLobbyId = otherBot.currentLobbyId?.toString();
+            const otherInList = otherLobbyId 
+                ? filteredLobbies.some(l => l.lobbyId?.toString() === otherLobbyId) 
+                : false;
+            const otherInCooldown = Date.now() < (otherBot.cooldownUntil || 0);
+            
+            // 紧急情况：我不在展示位 + 另一个也不在展示位 + 另一个不在冷却
+            const emergency = myLobbyId && !inList && !otherInList && !otherInCooldown;
+
             logInfo(
                 'Showcase',
-                `Presence检查 主号${bot.label}: 当前房间=${myLobbyId || '无'} | 游廊=${lobbyCount} | 阈值=${minLobbyCountForRotation} | 在展示位=${inList ? '是' : '否'} | 房龄=${roomAgeMin}m/${rotationCycleMinutes || 0}m`
+                `Presence检查 主号${bot.label}: 当前房间=${myLobbyId || '无'} | 游廊=${lobbyCount} | 阈值=${minLobbyCountForRotation} | 在展示位=${inList ? '是' : '否'} | 房龄=${roomAgeMin}m/${rotationCycleMinutes || 0}m` +
+                (emergency ? ' | ⚠️紧急:另一主号也不在展示位!' : '')
             );
 
             // ===== 稳定护栏：避免单次/短暂查询抖动导致误重建 =====
-            // 注意：rotation_cycle_minutes 只表示“房龄到期必须刷新”，不能用于“消失阈值”。
-            // 这里用“两次查询确认窗口”：默认 presence_query_interval_minutes * 2（例如 2min * 2 = 4min），不新增配置项。
+            // 注意：rotation_cycle_minutes 只表示"房龄到期必须刷新"，不能用于"消失阈值"。
+            // 这里用"两次查询确认窗口"：默认 presence_query_interval_minutes * 2（例如 2min * 2 = 4min），不新增配置项。
+            // 但如果是紧急情况（两个主号都不在展示位），则跳过稳定护栏立即创建
             if (myLobbyId && inList) {
                 bot.missingSince = 0; // 已看到，清零
             }
-            if (myLobbyId && !inList) {
+            if (myLobbyId && !inList && !emergency) {  // 非紧急情况才走稳定护栏
                 const queryIntervalMin = this.settings.presence_query_interval_minutes || 2;
                 const missingGraceMinutes = Math.max(2, queryIntervalMin * 2);
                 const missingThresholdMs = missingGraceMinutes * 60 * 1000;
@@ -841,13 +854,18 @@ class ShowcaseManager {
                 const missingMs = now - bot.missingSince;
                 const missingMinutes = Math.floor(missingMs / 60000);
 
-                // 未超过“二次确认窗口”时不触发创建（稳定优先）
+                // 未超过"二次确认窗口"时不触发创建（稳定优先）
                 // 但如果房龄已过期（expiredByAge），则必须刷新，不能被此护栏挡住
                 if (!expiredByAge && missingMs < missingThresholdMs) {
                     logInfo('Showcase', `主号${bot.label} 暂时不在展示位（消失${missingMinutes}m<${missingGraceMinutes}m），等待下轮...`);
                     return;
                 }
                 // 超过阈值：允许按原逻辑继续触发创建
+            }
+            
+            // 紧急情况：跳过稳定护栏，直接进入创建逻辑
+            if (emergency) {
+                logWarning('Showcase', `⚠️ 紧急：两个主号都不在展示位！主号${bot.label} 跳过等待，立即创建新房...`);
             }
 
             // 没有房间 / 房龄过期(>=rotation_cycle_minutes) / (消失超过二次确认窗口后)不在列表 → 创建新房间 + 结算1个
