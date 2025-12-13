@@ -277,7 +277,14 @@ class ShowcaseBot {
         this.knownTimestamp = 1763646905;
         
         // 房间查询回调
-        this.lobbyQueryCallback = null;
+        // 旧版单回调容易被并发查询覆盖，改为并发安全的队列式查询
+        this._lobbyQueryCallbacks = [];
+        this._lobbyQueryInFlight = false;
+        this._lobbyQueryTimeoutHandle = null;
+        this._lobbyQueryFinish = null;
+
+        // Presence mode: 每个主号的冷却时间（创建/结算后暂停操作）
+        this.cooldownUntil = 0;
 
         this.setupListeners();
     }
@@ -324,6 +331,16 @@ class ShowcaseBot {
         
         // 防止重复登录
         if (this.state === 'LOGGING_IN') {
+            return;
+        }
+        
+        // 如果 Steam 已经登录（有steamID），只需重新连接GC
+        if (this.client.steamID) {
+            this.log('♻️ Steam已登录，重新连接GC...');
+            this.state = 'ONLINE';
+            this.is_gc_connected = false;
+            this.client.gamesPlayed([this.settings.target_app_id]);
+            setTimeout(() => this.connectGC(), 2000);
             return;
         }
         
@@ -544,9 +561,8 @@ class ShowcaseBot {
             try {
                 const response = CMsgJoinableCustomLobbiesResponse.decode(payload);
                 const lobbies = response.lobbies || [];
-                if (this.lobbyQueryCallback) {
-                    this.lobbyQueryCallback(lobbies);
-                    this.lobbyQueryCallback = null;
+                if (this._lobbyQueryFinish) {
+                    this._lobbyQueryFinish(lobbies, { ok: true });
                 }
             } catch (e) {}
         }
@@ -554,32 +570,64 @@ class ShowcaseBot {
     
     // 查询房间列表
     queryLobbyList(callback) {
+        // 兼容旧接口：只返回 lobbies 数组
+        this.queryLobbyListDetailed((lobbies) => callback(lobbies));
+    }
+
+    // 查询房间列表（并发安全 + 返回 meta，用于判断查询是否有效）
+    queryLobbyListDetailed(callback) {
         if (!this.is_gc_connected) {
-            callback([]);
+            callback([], { ok: false, reason: 'no_gc' });
             return;
         }
-        
-        this.lobbyQueryCallback = callback;
-        
+
+        this._lobbyQueryCallbacks.push(callback);
+
+        // 已有请求在飞，直接排队等待同一结果
+        if (this._lobbyQueryInFlight) return;
+        this._lobbyQueryInFlight = true;
+
+        const timeoutMs = this.settings.lobby_query_timeout_ms || 20000;
+        let finished = false;
+
+        const finish = (lobbies, meta) => {
+            if (finished) return;
+            finished = true;
+
+            this._lobbyQueryInFlight = false;
+            this._lobbyQueryFinish = null;
+
+            if (this._lobbyQueryTimeoutHandle) {
+                clearTimeout(this._lobbyQueryTimeoutHandle);
+                this._lobbyQueryTimeoutHandle = null;
+            }
+
+            const callbacks = this._lobbyQueryCallbacks;
+            this._lobbyQueryCallbacks = [];
+
+            callbacks.forEach((cb) => {
+                try { cb(lobbies, meta); } catch (e) {}
+            });
+        };
+
+        this._lobbyQueryFinish = finish;
+
         try {
             const gameId = this.settings.custom_game_id;
             const gameIdLong = Long.fromString(gameId, true);
             const payload = { server_region: 0, custom_game_id: gameIdLong };
             const message = CMsgJoinableCustomLobbiesRequest.create(payload);
             const buffer = CMsgJoinableCustomLobbiesRequest.encode(message).finish();
-            
+
             this.client.sendToGC(this.settings.target_app_id, k_EMsgGCJoinableCustomLobbiesRequest | k_EMsgProtoMask, {}, buffer);
         } catch (err) {
-            callback([]);
+            finish([], { ok: false, reason: 'send_error' });
+            return;
         }
-        
-        // 超时处理
-        setTimeout(() => {
-            if (this.lobbyQueryCallback === callback) {
-                this.lobbyQueryCallback = null;
-                callback([]);
-            }
-        }, 5000);
+
+        this._lobbyQueryTimeoutHandle = setTimeout(() => {
+            finish([], { ok: false, reason: 'timeout' });
+        }, timeoutMs);
     }
 
     processLobbyData(objectData) {
@@ -655,11 +703,9 @@ class ShowcaseManager {
         this.settings = config.global_settings;
         this.showcaseLeaders = config.showcase_leaders;
         this.bots = [];
-        this.currentActiveIndex = 0; // 当前活跃的展示主号 (0=A, 1=B)
-        this.rotationTimer = null;
-        this.rotationCycleMinutes = this.settings.rotation_cycle_minutes || 25;
-        this.rotationCount = 0;
-        this.isRotating = false;
+        // Presence mode（简单稳定模式）- 仅保留这一套逻辑，避免双实现带来的排查成本
+        this.presenceTimers = [];
+        this.presenceLock = false;
     }
 
     start() {
@@ -672,31 +718,31 @@ class ShowcaseManager {
         
         logInfo('Showcase', `展示主号A: ${this.showcaseLeaders[0].username}`);
         logInfo('Showcase', `展示主号B: ${this.showcaseLeaders[1].username}`);
-        logInfo('Showcase', `轮换周期: ${this.rotationCycleMinutes} 分钟`);
-        
+
         // 创建2个展示主号Bot
         this.showcaseLeaders.forEach((account, idx) => {
             const bot = new ShowcaseBot(account, this.settings, idx);
             this.bots.push(bot);
         });
-        
-        // 只启动主号A，创建第一个公开房
-        logInfo('Showcase', `🚀 启动展示主号A，创建初始公开房...`);
-        this.bots[0].start();
-        
-        // 等待主号A连接GC后创建房间
-        this.waitForGCAndCreateRoom(this.bots[0]);
-        
-        // 启动轮换定时器
-        this.startRotationTimer();
-    }
 
-    waitForGCAndCreateRoom(bot) {
+        // 两个主号都先登录预热（A/B都需要随时可用）
+        logInfo('Showcase', `🔄 启动展示主号A/B 预热登录（仅登录，按需创建房间）...`);
+        this.bots[0].start();
+        this.bots[1].start();
+
+        this.waitForGCOnly(this.bots[0]);
+        this.waitForGCOnly(this.bots[1]);
+
+        // 仅保留 Presence 模式（按需创建 + 结算1个 + 冷却）
+        this.startPresenceMode();
+    }
+    
+    // 仅等待GC连接（用于预热，不创建房间）
+    waitForGCOnly(bot) {
         const checkInterval = setInterval(() => {
             if (bot.is_gc_connected) {
                 clearInterval(checkInterval);
-                logInfo('Showcase', `展示主号${bot.label} GC已连接，创建公开房...`);
-                bot.createPublicRoom();
+                logSuccess('Showcase', `展示主号${bot.label} 预热完成，GC已连接`);
             }
         }, 1000);
         
@@ -704,164 +750,119 @@ class ShowcaseManager {
         setTimeout(() => {
             clearInterval(checkInterval);
             if (!bot.is_gc_connected) {
-                logError('Showcase', `展示主号${bot.label} GC连接超时`);
+                logWarning('Showcase', `展示主号${bot.label} 预热超时，将在轮换时重试`);
             }
         }, 60000);
     }
 
-    startRotationTimer() {
-        const rotationMs = this.rotationCycleMinutes * 60 * 1000;
-        
-        logInfo('Showcase', `⏱️ 轮换定时器已启动`);
-        logInfo('Showcase', `   下次轮换: ${this.rotationCycleMinutes} 分钟后`);
-        
-        this.rotationTimer = setInterval(() => {
-            this.executeRotation();
-        }, rotationMs);
+    // ========== Presence Mode（简单稳定模式）==========
+    startPresenceMode() {
+        // 规则：
+        // - A/B 每2分钟查询一次，错开1分钟
+        // - 查询无效（超时/空）不触发
+        // - 如果查询有效且看不到“本主号的房间”，则创建新房 + 结算(解散)1个最老挂机房
+        // - 创建/结算后进入5分钟冷却，不做任何操作
+
+        const intervalMs = (this.settings.presence_query_interval_minutes || 2) * 60 * 1000;
+        const offsetMs = (this.settings.presence_query_offset_minutes || 1) * 60 * 1000;
+        const cooldownMs = (this.settings.presence_cooldown_minutes || 5) * 60 * 1000;
+
+        logInfo('Showcase', `✅ 已启用 Presence 模式：查询间隔=${intervalMs / 60000}m，AB错开=${offsetMs / 60000}m，冷却=${cooldownMs / 60000}m，结算=1个`);
+
+        const scheduleBot = (bot, initialDelay) => {
+            const timer = setTimeout(() => {
+                // 先立即执行一次，然后再进入 interval
+                this.presenceTick(bot, cooldownMs);
+                const t2 = setInterval(() => this.presenceTick(bot, cooldownMs), intervalMs);
+                this.presenceTimers.push(t2);
+            }, initialDelay);
+            this.presenceTimers.push(timer);
+        };
+
+        // A 立即开始；B 延迟 offset
+        scheduleBot(this.bots[0], 0);
+        scheduleBot(this.bots[1], offsetMs);
     }
 
-    async executeRotation() {
-        if (this.isRotating) {
-            logWarning('Showcase', '轮换正在进行中，跳过本次');
-            return;
-        }
-        
-        this.isRotating = true;
-        this.rotationCount++;
-        
-        const currentBot = this.bots[this.currentActiveIndex];
-        const nextIndex = (this.currentActiveIndex + 1) % 2;
-        const nextBot = this.bots[nextIndex];
-        
-        logSection(`第 ${this.rotationCount} 次轮换（双房间模式）`);
-        logInfo('Showcase', `当前活跃: 主号${currentBot.label} (${currentBot.account.username})`);
-        logInfo('Showcase', `主号${currentBot.label}房间: ${currentBot.currentLobbyId?.toString() || '无'} (存活: ${this.getRoomAge(currentBot)}分钟)`);
-        logInfo('Showcase', `主号${nextBot.label}房间: ${nextBot.currentLobbyId?.toString() || '无'} (存活: ${this.getRoomAge(nextBot)}分钟)`);
-        logInfo('Showcase', `即将操作: 主号${nextBot.label} 创建新房间`);
-        
+    async presenceTick(bot, cooldownMs) {
+        // 严格串行：避免 A/B 同时创建/结算导致更多不可控因素
+        if (this.presenceLock) return;
+
+        // 未连接GC、或在冷却期 → 不操作
+        if (!bot.is_gc_connected) return;
+        if (Date.now() < (bot.cooldownUntil || 0)) return;
+
+        this.presenceLock = true;
         try {
-            // ========== 双房间模式轮换 ==========
-            
-            // 步骤1: 确保新主号已连接
-            logInfo('Showcase', `[步骤1/3] 确保主号${nextBot.label}已连接...`);
-            if (!nextBot.is_gc_connected || nextBot.state === 'OFFLINE') {
-                logInfo('Showcase', `主号${nextBot.label}尚未连接，启动登录...`);
-                nextBot.start();
-                await this.waitForGCConnection(nextBot, 30000);
-            }
-            
-            if (!nextBot.is_gc_connected) {
-                logError('Showcase', `主号${nextBot.label}连接失败，取消本次轮换`);
-                this.isRotating = false;
+            // 查询（带 meta）
+            const { lobbies, ok } = await this.queryLobbiesDetailed(bot);
+
+            // 查询无效 或 空列表（按你的规则：不触发任何动作）
+            if (!ok || !lobbies || lobbies.length === 0) {
+                logWarning('Showcase', `主号${bot.label} 查询无效/空列表，跳过本轮（不创建/不结算）`);
                 return;
             }
-            logSuccess('Showcase', `主号${nextBot.label}已就绪`);
-            
-            // 步骤2: 如果新主号有旧房间，先离开
-            logInfo('Showcase', `[步骤2/3] 主号${nextBot.label}创建新公开房...`);
-            if (nextBot.currentLobbyId) {
-                const oldLobbyId = nextBot.currentLobbyId.toString();
-                logInfo('Showcase', `主号${nextBot.label}当前有旧房间 ${oldLobbyId}，先离开...`);
-                nextBot.leaveLobby();
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-            
-            nextBot.createPublicRoom();
-            await this.waitForRoomCreation(nextBot, 20000);
-            
-            if (!nextBot.currentLobbyId) {
-                logError('Showcase', `新公开房创建失败，取消本次轮换`);
-                this.isRotating = false;
-                return;
-            }
-            logSuccess('Showcase', `新公开房: ${nextBot.currentLobbyId.toString()}`);
-            
-            // 步骤3: 【双房间模式】不解散旧主号的房间，保持两个房间同时存在
-            logInfo('Showcase', `[步骤3/3] 保持主号${currentBot.label}的房间（双房间模式）`);
-            if (currentBot.currentLobbyId) {
-                logInfo('Showcase', `主号${currentBot.label}房间保持: ${currentBot.currentLobbyId.toString()}`);
-            } else {
-                logInfo('Showcase', `主号${currentBot.label}当前无房间`);
-            }
-            
-            // 更新活跃索引
-            this.currentActiveIndex = nextIndex;
-            
-            logSuccess('Showcase', `主号轮换完成，当前活跃: 主号${nextBot.label}`);
-            logInfo('Showcase', `同时存在房间: 主号A=${this.bots[0].currentLobbyId?.toString() || '无'}, 主号B=${this.bots[1].currentLobbyId?.toString() || '无'}`);
-            
-            // ========== 小号房间处理（简化版）==========
-            
-            // 查询房间列表
-            logInfo('Showcase', `查询游廊房间列表...`);
+
             const targetGameId = this.settings.custom_game_id;
-            const minLobbyCountForRotation = this.settings.min_lobby_count_for_rotation || 75;
-            
-            const lobbies = await this.queryLobbies(nextBot);
-            const filteredLobbies = lobbies.filter(lobby => {
-                const gameId = lobby.customGameId?.toString();
-                return gameId === targetGameId;
-            });
+            const filteredLobbies = lobbies.filter(lobby => lobby.customGameId?.toString() === targetGameId);
             const lobbyCount = filteredLobbies.length;
-            
-            // 检查两个主号房间是否都在列表中
-            const botALobbyId = this.bots[0].currentLobbyId?.toString();
-            const botBLobbyId = this.bots[1].currentLobbyId?.toString();
-            const botAInList = botALobbyId ? filteredLobbies.some(l => l.lobbyId?.toString() === botALobbyId) : false;
-            const botBInList = botBLobbyId ? filteredLobbies.some(l => l.lobbyId?.toString() === botBLobbyId) : false;
-            
-            logInfo('Showcase', `游廊房间: ${lobbyCount}个 | 主号A在列表: ${botAInList ? '是' : '否'} | 主号B在列表: ${botBInList ? '是' : '否'}`);
-            
-            // 获取当前所有主号房间ID（用于排除）
-            const showcaseLobbyIds = [botALobbyId, botBLobbyId].filter(id => id);
-            
-            // 如果两个主号房间都不在列表中，强制解散小号腾位置
-            if (!botAInList && !botBInList && (botALobbyId || botBLobbyId)) {
-                logWarning('Showcase', `⚠️ 两个主号房间都不在展示位，强制解散小号房间腾出位置...`);
-                const oldestRooms = this.findOldestRoomsExcluding(lobbies, 5, showcaseLobbyIds);
-                if (oldestRooms.length > 0) {
-                    logInfo('Showcase', `通知挂机车队解散 ${oldestRooms.length} 个最老房间...`);
-                    oldestRooms.forEach((room, idx) => {
-                        logInfo('Showcase', `   ${idx + 1}. ${room.lobbyId} (创建时间: ${new Date(room.createdAt * 1000).toLocaleTimeString()})`);
-                    });
-                    await this.notifyFarmingFleet(oldestRooms.map(r => r.lobbyId.toString()));
-                } else {
-                    logWarning('Showcase', `没有找到可解散的挂机房间`);
+            const minLobbyCountForRotation = this.settings.min_lobby_count_for_rotation || 75;
+
+            const myLobbyId = bot.currentLobbyId?.toString();
+            const inList = myLobbyId ? filteredLobbies.some(l => l.lobbyId?.toString() === myLobbyId) : false;
+
+            logInfo('Showcase', `Presence检查 主号${bot.label}: 当前房间=${myLobbyId || '无'} | 游廊=${lobbyCount} | 阈值=${minLobbyCountForRotation} | 在展示位=${inList ? '是' : '否'}`);
+
+            // 没有房间 或 不在列表 → 创建新房间 + 结算1个
+            if (!myLobbyId || !inList) {
+                logInfo('Showcase', `主号${bot.label} 未在展示位，创建新房并结算 1 个最老挂机房...`);
+
+                // 如果有旧房间，先离开（确保“新房”是新的 lobbyId）
+                if (bot.currentLobbyId) {
+                    bot.leaveLobby();
+                    await new Promise(r => setTimeout(r, 2000));
                 }
-            }
-            // 房间数 >= 阈值 → 解散5个最老的小号
-            else if (lobbyCount >= minLobbyCountForRotation) {
-                const oldestRooms = this.findOldestRoomsExcluding(lobbies, 5, showcaseLobbyIds);
-                if (oldestRooms.length > 0) {
-                    logInfo('Showcase', `房间数达到阈值(${lobbyCount}>=${minLobbyCountForRotation})，通知挂机车队解散 ${oldestRooms.length} 个最老房间...`);
-                    oldestRooms.forEach((room, idx) => {
-                        logInfo('Showcase', `   ${idx + 1}. ${room.lobbyId} (创建时间: ${new Date(room.createdAt * 1000).toLocaleTimeString()})`);
-                    });
-                    await this.notifyFarmingFleet(oldestRooms.map(r => r.lobbyId.toString()));
-                } else {
-                    logInfo('Showcase', `没有找到需要解散的挂机房间`);
+
+                bot.createPublicRoom();
+                const created = await this.waitForRoomCreation(bot, 20000);
+                if (!created || !bot.currentLobbyId) {
+                    logError('Showcase', `主号${bot.label} 创建新房失败，本轮结束`);
+                    return;
                 }
+
+                const newLobbyId = bot.currentLobbyId.toString();
+                logSuccess('Showcase', `主号${bot.label} 新房创建成功: ${newLobbyId}`);
+
+                // 结算：仅当展示位接近上限（>=阈值）才需要解散 1 个最老挂机房腾位
+                if (lobbyCount >= minLobbyCountForRotation) {
+                    const showcaseLobbyIds = [this.bots[0].currentLobbyId?.toString(), this.bots[1].currentLobbyId?.toString()].filter(Boolean);
+                    const oldestRooms = this.findOldestRoomsExcluding(lobbies, 1, showcaseLobbyIds);
+                    if (oldestRooms.length > 0) {
+                        logInfo('Showcase', `结算：房间数达到阈值(${lobbyCount}>=${minLobbyCountForRotation})，通知挂机车队解散 1 个最老房间...`);
+                        logInfo('Showcase', `   1. ${oldestRooms[0].lobbyId} (创建时间: ${new Date(oldestRooms[0].createdAt * 1000).toLocaleTimeString()})`);
+                        await this.notifyFarmingFleet([oldestRooms[0].lobbyId.toString()]);
+                    } else {
+                        logInfo('Showcase', `结算：房间数达到阈值，但未找到可解散的挂机房间（跳过）`);
+                    }
+                } else {
+                    logInfo('Showcase', `结算：房间数未达阈值(${lobbyCount}<${minLobbyCountForRotation})，无需解散（跳过）`);
+                }
+
+                // 冷却 5 分钟（严格不操作）
+                bot.cooldownUntil = Date.now() + cooldownMs;
+                logInfo('Showcase', `主号${bot.label} 进入冷却 ${(cooldownMs / 60000)} 分钟`);
             }
-            // 房间数 < 阈值 → 不解散
-            else {
-                logInfo('Showcase', `房间数量(${lobbyCount})未达阈值(${minLobbyCountForRotation})，跳过解散`);
-            }
-            
-            logSection(`轮换完成`);
-            logInfo('Showcase', `下次轮换: ${this.rotationCycleMinutes} 分钟后`);
-            
-        } catch (err) {
-            logError('Showcase', `轮换失败: ${err.message}`);
+        } catch (e) {
+            logWarning('Showcase', `PresenceTick 异常: ${e.message}`);
+        } finally {
+            this.presenceLock = false;
         }
-        
-        this.isRotating = false;
     }
-    
-    // 查询房间列表
-    queryLobbies(bot) {
+
+    queryLobbiesDetailed(bot) {
         return new Promise((resolve) => {
-            bot.queryLobbyList((lobbies) => {
-                resolve(lobbies);
+            bot.queryLobbyListDetailed((lobbies, meta) => {
+                resolve({ lobbies, ok: !!meta?.ok, meta });
             });
         });
     }
@@ -976,10 +977,14 @@ class ShowcaseManager {
 
     cleanup() {
         logInfo('Showcase', '🧹 清理资源...');
-        
-        if (this.rotationTimer) {
-            clearInterval(this.rotationTimer);
-            this.rotationTimer = null;
+
+        // presence timers
+        if (this.presenceTimers && this.presenceTimers.length > 0) {
+            this.presenceTimers.forEach((t) => {
+                try { clearTimeout(t); } catch (e) {}
+                try { clearInterval(t); } catch (e) {}
+            });
+            this.presenceTimers = [];
         }
         
         this.bots.forEach(bot => bot.cleanup());
@@ -988,29 +993,30 @@ class ShowcaseManager {
     }
 
     getStatus() {
-        const currentBot = this.bots[this.currentActiveIndex];
         const botA = this.bots[0];
         const botB = this.bots[1];
+        const now = Date.now();
+
+        const cooldownLeftA = botA?.cooldownUntil && botA.cooldownUntil > now ? Math.ceil((botA.cooldownUntil - now) / 60000) : 0;
+        const cooldownLeftB = botB?.cooldownUntil && botB.cooldownUntil > now ? Math.ceil((botB.cooldownUntil - now) / 60000) : 0;
         return {
-            currentActive: `主号${currentBot.label}`,
-            currentLobbyId: currentBot.currentLobbyId?.toString() || '无',
             lobbyA: botA.currentLobbyId ? `${botA.currentLobbyId.toString().slice(-6)}(${this.getRoomAge(botA)}m)` : '无',
             lobbyB: botB.currentLobbyId ? `${botB.currentLobbyId.toString().slice(-6)}(${this.getRoomAge(botB)}m)` : '无',
-            roomAge: this.getRoomAge(currentBot),
-            rotationCount: this.rotationCount,
-            nextRotation: `${this.rotationCycleMinutes}分钟周期`
+            cooldownA: cooldownLeftA ? `${cooldownLeftA}m` : '0m',
+            cooldownB: cooldownLeftB ? `${cooldownLeftB}m` : '0m'
         };
     }
     
     // 查询当前游戏的房间数量
     async queryGameLobbyCount() {
-        const currentBot = this.bots[this.currentActiveIndex];
-        if (!currentBot || !currentBot.is_gc_connected) {
+        const bot = this.bots.find(b => b && b.is_gc_connected);
+        if (!bot) {
             return -1; // 未连接
         }
         
         try {
-            const lobbies = await this.queryLobbies(currentBot);
+            const { lobbies, ok } = await this.queryLobbiesDetailed(bot);
+            if (!ok || !lobbies) return -1;
             const targetGameId = this.settings.custom_game_id;
             const filteredLobbies = lobbies.filter(lobby => {
                 const gameId = lobby.customGameId?.toString();
@@ -1061,7 +1067,6 @@ if (!fs.existsSync(steamDataDir)) {
 logSection('Dota2 展示车队 v1.0');
 logInfo('System', `模式: ${isDebugMode ? '调试模式' : '生产模式'}`);
 logInfo('System', `游戏ID: ${config.global_settings.custom_game_id}`);
-logInfo('System', `轮换周期: ${config.global_settings.rotation_cycle_minutes || 25} 分钟`);
 
 // 验证配置
 if (!config.showcase_leaders || config.showcase_leaders.length < 2) {
@@ -1079,7 +1084,7 @@ setInterval(async () => {
     const status = manager.getStatus();
     const lobbyCount = await manager.queryGameLobbyCount();
     const lobbyCountStr = lobbyCount >= 0 ? `${lobbyCount}` : '查询中';
-    logInfo('Status', `活跃: ${status.currentActive} | 房间A: ${status.lobbyA} | 房间B: ${status.lobbyB} | 轮换: ${status.rotationCount}次 | 游廊: ${lobbyCountStr}个`);
+    logInfo('Status', `模式: Presence | 房间A: ${status.lobbyA} 冷却:${status.cooldownA} | 房间B: ${status.lobbyB} 冷却:${status.cooldownB} | 游廊: ${lobbyCountStr}个`);
 }, 60000);
 
 // 异常处理
