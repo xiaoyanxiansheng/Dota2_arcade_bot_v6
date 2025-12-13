@@ -1045,7 +1045,11 @@ class LeaderBot {
 
         // 🔴 IP 轮换相关
         this.proxyIndex = 0;
-        this.roomsPerProxy = settings.leader_proxy_rotate_rooms || 100;
+        // 🔴 根据主号数量动态计算每个主号的房间阈值
+        // leader_proxy_rotate_rooms 表示"总房间数阈值"，所有主号合计达到该数后集体换 IP
+        const leaderCount = manager.leadersConfig?.length || 1;
+        const totalRoomsThreshold = settings.leader_proxy_rotate_rooms || 100;
+        this.roomsPerProxy = Math.max(1, Math.floor(totalRoomsThreshold / leaderCount));
         this.roomsSinceLastRotate = 0;
         this.isReconnecting = false; // 🔴 防止重复重连
 
@@ -1661,7 +1665,9 @@ class FarmingManager {
         logInfo('System', `每房间最大人数: ${this.settings.max_players_per_room || 24} 人`);
         logInfo('System', `主号数量: ${this.leadersConfig.length} 个`);
         logInfo('System', `代理总数: ${this.proxies.length} 个`);
-        logInfo('System', `  ├─ 主号专用: ${this.leaderProxies.length} 个 (每 ${this.settings.leader_proxy_rotate_rooms || 100} 房间轮换)`);
+        const totalRoomsThreshold = this.settings.leader_proxy_rotate_rooms || 100;
+        const roomsPerLeader = Math.max(1, Math.floor(totalRoomsThreshold / this.leadersConfig.length));
+        logInfo('System', `  ├─ 主号专用: ${this.leaderProxies.length} 个 (总阈值${totalRoomsThreshold}房间/${this.leadersConfig.length}主号=${roomsPerLeader}房间/号后轮换)`);
         logInfo('System', `  └─ 小号共享: ${this.followerProxies.length} 个`);
         
         // 创建主号Bot
