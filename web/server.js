@@ -19,6 +19,10 @@ const PORT = 3000;
 const PROJECT_ROOT = path.join(__dirname, '..');
 const DATA_DIR = path.join(PROJECT_ROOT, 'data');
 
+// farming 主号状态：等待队列（用于 /api/farming/leaders_status）
+let _farmingLeadersStatusWaiters = [];
+let _lastFarmingLeadersStatus = null;
+
 // 进程管理
 const processes = {
     showcase: { process: null, startTime: null },
@@ -73,6 +77,32 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT, logSource = null) 
         const lines = data.toString().split('\n');
         lines.forEach(line => {
             if (line.trim()) {
+                // 🔴 解析 farming 输出的 JSON 事件（不写入日志，避免污染界面）
+                // 用于：主号状态查询 + 启停结果回传
+                if (key === 'farming') {
+                    try {
+                        const obj = JSON.parse(line);
+                        if (obj && typeof obj === 'object') {
+                            if (obj.type === 'leaders_status' && Array.isArray(obj.data)) {
+                                _lastFarmingLeadersStatus = obj.data;
+                                // 唤醒所有等待者
+                                const waiters = _farmingLeadersStatusWaiters;
+                                _farmingLeadersStatusWaiters = [];
+                                waiters.forEach(w => {
+                                    try { w.resolve(obj.data); } catch (e) {}
+                                });
+                                // 推送给前端（可用于实时 UI）
+                                io.emit('farmingLeadersStatus', { data: obj.data });
+                                return; // 不输出到日志
+                            }
+                            if (obj.type === 'stop_leader_result' || obj.type === 'start_leader_result') {
+                                io.emit('farmingLeaderActionResult', obj);
+                                return; // 不输出到日志
+                            }
+                        }
+                    } catch (e) {}
+                }
+
                 // 检测是否需要验证码
                 if (line.includes('[STEAM_GUARD]')) {
                     const domain = line.replace('[STEAM_GUARD]', '').trim();
@@ -297,6 +327,91 @@ app.post('/api/settle_rooms', (req, res) => {
     res.json({ success: true, message: `已请求结算 ${count} 个房间` });
 });
 
+// 停止指定挂机主号（释放账号去做别的事情）
+app.post('/api/farming/stop_leader', (req, res) => {
+    const { username, index, mode } = req.body || {};
+
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+
+    if ((!username || !String(username).trim()) && (index === undefined || index === null || index === '')) {
+        return res.status(400).json({ error: '缺少 username 或 index' });
+    }
+
+    try {
+        const payload = { type: 'stop_leader' };
+        if (username) payload.username = String(username).trim();
+        if (index !== undefined && index !== null && index !== '') payload.index = index;
+        if (mode) payload.mode = mode;
+
+        const command = JSON.stringify(payload) + '\n';
+        processes.farming.process.stdin.write(command);
+        broadcastLog('System', `已发送停止主号命令: ${payload.username || ('index=' + payload.index)} mode=${payload.mode || 'immediate'}`, 'info');
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 启动指定挂机主号（加回流程）
+app.post('/api/farming/start_leader', (req, res) => {
+    const { username, index } = req.body || {};
+
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+
+    if ((!username || !String(username).trim()) && (index === undefined || index === null || index === '')) {
+        return res.status(400).json({ error: '缺少 username 或 index' });
+    }
+
+    try {
+        const payload = { type: 'start_leader' };
+        if (username) payload.username = String(username).trim();
+        if (index !== undefined && index !== null && index !== '') payload.index = index;
+        const command = JSON.stringify(payload) + '\n';
+        processes.farming.process.stdin.write(command);
+        broadcastLog('System', `已发送启动主号命令: ${payload.username || ('index=' + payload.index)}`, 'info');
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 获取挂机主号状态（会向 farming 进程请求一次，等待 JSON 回传）
+app.get('/api/farming/leaders_status', async (req, res) => {
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+
+    const timeoutMs = Number(req.query?.timeoutMs || 5000);
+    const timeout = Number.isFinite(timeoutMs) ? Math.max(1000, Math.min(timeoutMs, 20000)) : 5000;
+
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const waiter = {};
+            const timer = setTimeout(() => {
+                // 超时：从等待队列移除，避免泄漏
+                _farmingLeadersStatusWaiters = _farmingLeadersStatusWaiters.filter(w => w !== waiter);
+                reject(new Error('timeout'));
+            }, timeout);
+            waiter.resolve = (d) => { clearTimeout(timer); resolve(d); };
+            waiter.reject = (e) => { clearTimeout(timer); reject(e); };
+            _farmingLeadersStatusWaiters.push(waiter);
+            // 发送查询命令
+            processes.farming.process.stdin.write(JSON.stringify({ type: 'get_leaders_status' }) + '\n');
+        });
+        res.json({ success: true, data });
+    } catch (e) {
+        // 超时则回退到“最近一次缓存”（如果有）
+        if (_lastFarmingLeadersStatus) {
+            return res.json({ success: true, data: _lastFarmingLeadersStatus, stale: true });
+        }
+        res.status(504).json({ error: '获取主号状态超时' });
+    }
+});
+
 // 读取配置
 app.get('/api/config/:type', (req, res) => {
     const type = req.params.type; // showcase | leaders
@@ -463,6 +578,28 @@ app.post('/api/farm/add_to_pool', (req, res) => {
         const command = JSON.stringify({ type: 'add_config', configName }) + '\n';
         processes.farming.process.stdin.write(command);
         broadcastLog('System', `已发送添加配置命令: ${configName}`, 'info');
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 🔴 新增：将配置从小号池子移除（运行时移除：退房→登出→退出池子）
+app.post('/api/farm/remove_from_pool', (req, res) => {
+    const { configName } = req.body;
+    
+    if (!configName) {
+        return res.status(400).json({ error: '缺少配置名称' });
+    }
+    
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+    
+    try {
+        const command = JSON.stringify({ type: 'remove_config', configName }) + '\n';
+        processes.farming.process.stdin.write(command);
+        broadcastLog('System', `已发送移除配置命令: ${configName}`, 'info');
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -653,11 +790,6 @@ app.post('/api/tool/:name', (req, res) => {
         // 测试代理
         args = ['commands/test_proxies.js'];
         processes.tool.name = 'Test Proxies';
-        
-    } else if (name === 'clear_all') {
-        // 清理所有
-        args = ['commands/clear_all.js'];
-        processes.tool.name = 'Clear All';
         
     } else if (name === 'test_leader') {
         // 测试挂机主号：需要 username, password, gameId，可选 proxy, shared_secret

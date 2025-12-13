@@ -269,6 +269,13 @@ class FollowerPool {
 
     // 添加小号到池子（状态2：创建未分配）
     addToIdle(follower) {
+        // 🔴 新增：配置移除中/已移除的小号，禁止回池（不影响旧逻辑）
+        if (follower && follower.removing) {
+            try {
+                this.manager?.finalizeFollowerRemoval?.(follower, { from: 'pool.addToIdle' });
+            } catch (e) {}
+            return;
+        }
         if (!this.idle.includes(follower)) {
             this.idle.push(follower);
             follower.state = FollowerState.IDLE;
@@ -325,6 +332,13 @@ class FollowerPool {
 
         // 回到空闲池
         follower.currentLobbyId = null;
+        // 🔴 新增：配置移除中/已移除的小号，禁止回池（不影响旧逻辑）
+        if (follower && follower.removing) {
+            try {
+                this.manager?.finalizeFollowerRemoval?.(follower, { from: 'pool.returnToPool' });
+            } catch (e) {}
+            return;
+        }
         this.addToIdle(follower);
         
         logSuccess('Pool', `✅ ${follower.account.username} 已回到池子 (原房间: ${prevLobby || '无'})`);
@@ -380,6 +394,11 @@ class FollowerBot {
         this.settings = settings;
         this.manager = manager;
         this.pool = manager.pool;
+
+        // 🔴 新增：归属配置 + 移除标记（默认不启用，不影响旧逻辑）
+        this.configName = null;
+        this.removing = false;
+        this._finalizedRemoval = false;
         
         this.state = FollowerState.PENDING;
         this.client = null;
@@ -926,6 +945,14 @@ class FollowerBot {
         
         // 清除加入超时（如果是 ASSIGNED 状态正在加入）
         this.clearJoinTimeout();
+
+        // 🔴 新增：如果该小号正在被移除，则不回池，只做“摘除引用”
+        if (this.removing) {
+            try {
+                this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.onLobbyRemoved' });
+            } catch (e) {}
+            return;
+        }
         
         this.pool.returnToPool(this);
     }
@@ -1182,6 +1209,11 @@ class LeaderBot {
 
     // 🔴 新增：统一处理断开连接
     handleDisconnect(reason) {
+        // 🔴 停止/手动退出时会触发 loggedOff/disconnected 事件：
+        // 这种情况不需要“重连”，也不应该重复 cleanup 或输出误导日志。
+        if (this.stopped) {
+            return;
+        }
         // 🔴 防止重复触发（error 和 disconnected 可能同时触发）
         if (this.isReconnecting) {
             return;
@@ -1550,6 +1582,9 @@ class FarmingManager {
         
         // 已加载的配置（防止重复加载）
         this.loadedConfigs = new Set();
+
+        // 🔴 新增：配置 -> 小号集合（用于运行时移除配置，不影响旧逻辑）
+        this.configFollowers = new Map(); // configName -> Set<FollowerBot>
         
         // 时间统计
         this.startTime = null;
@@ -1558,6 +1593,10 @@ class FarmingManager {
         this.pool = new FollowerPool(this);
         this.leaders = [];
         this.allFollowers = [];  // 所有小号
+
+        // 🔴 新增：记录“主号是否应停止”（仅运行时，避免改动旧配置文件）
+        // 注意：LeaderBot.stopped 仍是最终开关；这个集合用于查询/展示。
+        this.stoppedLeaderUsernames = new Set();
         
         // 登录参数 - 流水线模式
         this.loginInterval = 100;      // 每个小号间隔100ms
@@ -1572,6 +1611,119 @@ class FarmingManager {
         this._lobbyQueryTimeoutHandle = null;
         this._lobbyQueryFinish = null;
         this._lobbyQuerySender = null;
+    }
+
+    // 🔴 新增：统一定位主号（username 或 index 兼容）
+    _findLeader(params = {}) {
+        const username = typeof params.username === 'string' ? params.username.trim() : '';
+        const indexRaw = params.index;
+
+        if (username) {
+            return this.leaders.find(l => l && l.account && l.account.username === username) || null;
+        }
+
+        if (indexRaw !== undefined && indexRaw !== null && indexRaw !== '') {
+            const n = Number(indexRaw);
+            if (Number.isFinite(n)) {
+                const idx0 = (n >= 1) ? (n - 1) : n;
+                return this.leaders[idx0] || null;
+            }
+        }
+
+        return null;
+    }
+
+    // 🔴 新增：停止指定挂机主号（释放账号去做别的事情）
+    // 设计目标：不改旧流程，只在收到命令时执行。
+    // 支持按 username 或 index(1-based / 0-based 兼容) 指定。
+    stopLeader(params = {}) {
+        const mode = params.mode || 'immediate'; // 'immediate' | 'graceful'
+        const leader = this._findLeader(params);
+
+        if (!leader) {
+            const u = (typeof params.username === 'string' ? params.username.trim() : '') || '-';
+            const i = (params.index ?? '-');
+            logWarning('Farming', `⚠️ 停止主号失败：未找到目标 (username=${u} index=${i})`);
+            return { success: false, reason: 'not_found' };
+        }
+
+        const name = leader.account?.username || 'unknown';
+        if (leader.stopped) {
+            logWarning('Farming', `⚠️ 主号已停止：${name}`);
+            this.stoppedLeaderUsernames.add(name);
+            return { success: true, alreadyStopped: true, username: name };
+        }
+
+        logSection(`停止挂机主号: ${name}`);
+        logInfo('System', `模式: ${mode}`);
+
+        // 平滑模式：先让当前房间的小号退出（主号退出房间会把房主给小号，你说不需要处理；
+        // 这里的“平滑”仅用于减少突然解散/波动，可选）
+        if (mode === 'graceful') {
+            const lobbyId = leader.currentLobbyId?.toString();
+            if (lobbyId) {
+                try {
+                    this.dissolveRooms([lobbyId]);
+                } catch (e) {}
+            }
+        }
+
+        // 立即模式：直接 stop + cleanup（本身会发送 leave + logOff）
+        leader.stopped = true;
+        this.stoppedLeaderUsernames.add(name);
+        try { leader.cleanup(); } catch (e) {}
+
+        logSuccess('Farming', `✅ 已停止主号：${name}`);
+        return { success: true, username: name, mode };
+    }
+
+    // 🔴 新增：重新启动指定挂机主号（加回流程）
+    startLeader(params = {}) {
+        const leader = this._findLeader(params);
+        if (!leader) {
+            const u = (typeof params.username === 'string' ? params.username.trim() : '') || '-';
+            const i = (params.index ?? '-');
+            logWarning('Farming', `⚠️ 启动主号失败：未找到目标 (username=${u} index=${i})`);
+            return { success: false, reason: 'not_found' };
+        }
+
+        const name = leader.account?.username || 'unknown';
+        if (!leader.stopped && leader.client) {
+            // 已在运行/已登录：不重复启动
+            this.stoppedLeaderUsernames.delete(name);
+            logWarning('Farming', `⚠️ 主号已在运行：${name}`);
+            return { success: true, alreadyRunning: true, username: name };
+        }
+
+        logSection(`启动挂机主号: ${name}`);
+        // start() 内部会把 stopped=false 并重新登录
+        try {
+            this.stoppedLeaderUsernames.delete(name);
+            leader.start();
+        } catch (e) {
+            logError('Farming', `❌ 启动主号失败: ${name} - ${e.message}`);
+            return { success: false, reason: e.message, username: name };
+        }
+
+        logSuccess('Farming', `✅ 已启动主号：${name}`);
+        return { success: true, username: name };
+    }
+
+    // 🔴 新增：获取主号状态（用于前端显示/切换时展示）
+    getLeadersStatus() {
+        return (this.leaders || []).map((leader, idx) => {
+            const username = leader?.account?.username || `leader_${idx + 1}`;
+            const stopped = !!leader?.stopped || this.stoppedLeaderUsernames.has(username);
+            return {
+                index: idx + 1,
+                username,
+                stopped,
+                state: leader?.state || 'UNKNOWN',
+                is_gc_connected: !!leader?.is_gc_connected,
+                currentLobbyId: leader?.currentLobbyId ? leader.currentLobbyId.toString() : null,
+                roomsCreated: Number(leader?.roomsCreated || 0)
+            };
+        });
     }
 
     // 获取随机代理（带统计）- 小号专用
@@ -1733,6 +1885,12 @@ class FarmingManager {
             // 创建 FollowerBot 并加入登录队列
             followers.forEach((acc, idx) => {
                 const bot = new FollowerBot(acc, this.settings, this);
+                bot.configName = configName;
+                bot.removing = false;
+                if (!this.configFollowers.has(configName)) {
+                    this.configFollowers.set(configName, new Set());
+                }
+                this.configFollowers.get(configName).add(bot);
                 this.allFollowers.push(bot);
                 this.pool.all.push(bot);
                 this.pool.loginQueue.push(bot);  // 加入登录队列
@@ -1749,6 +1907,140 @@ class FarmingManager {
             logError('Farming', `❌ 加载配置失败: ${configName} - ${e.message}`);
             return { success: false, reason: e.message };
         }
+    }
+
+    // 🔴 新增：将某个小号彻底从池子/管理器中摘除（不做 cleanup，调用方负责）
+    // 设计目标：只在“移除配置”场景生效，不影响旧逻辑
+    finalizeFollowerRemoval(follower, meta = {}) {
+        if (!follower) return;
+        if (follower._finalizedRemoval) return;
+        follower._finalizedRemoval = true;
+
+        try {
+            // 1) 登录队列移除
+            if (Array.isArray(this.pool?.loginQueue) && this.pool.loginQueue.length > 0) {
+                this.pool.loginQueue = this.pool.loginQueue.filter(x => x !== follower);
+            }
+
+            // 2) 池子空闲移除
+            if (Array.isArray(this.pool?.idle) && this.pool.idle.length > 0) {
+                this.pool.idle = this.pool.idle.filter(x => x !== follower);
+            }
+
+            // 3) 已分配映射移除
+            if (this.pool?.assigned && typeof this.pool.assigned.forEach === 'function') {
+                const toDelete = [];
+                this.pool.assigned.forEach((arr, lobbyId) => {
+                    if (!Array.isArray(arr) || arr.length === 0) return;
+                    const next = arr.filter(x => x !== follower);
+                    if (next.length !== arr.length) {
+                        if (next.length === 0) toDelete.push(lobbyId);
+                        else this.pool.assigned.set(lobbyId, next);
+                    }
+                });
+                toDelete.forEach(id => this.pool.assigned.delete(id));
+            }
+
+            // 4) all 列表移除（统计 total 会跟着变化）
+            if (Array.isArray(this.pool?.all) && this.pool.all.length > 0) {
+                this.pool.all = this.pool.all.filter(x => x !== follower);
+            }
+            if (Array.isArray(this.allFollowers) && this.allFollowers.length > 0) {
+                this.allFollowers = this.allFollowers.filter(x => x !== follower);
+            }
+
+            // 5) 从 configFollowers 映射移除
+            const cfg = follower.configName;
+            if (cfg && this.configFollowers.has(cfg)) {
+                const set = this.configFollowers.get(cfg);
+                try { set.delete(follower); } catch (e) {}
+                if (set && set.size === 0) {
+                    // 不主动 delete（由 removeConfig 统一处理），避免误删
+                }
+            }
+        } catch (e) {
+            // 摘除失败不应影响主流程
+        }
+    }
+
+    // 🔴 新增：运行时移除某个配置（退出房间 → 退出登录 → 退出池子/程序）
+    removeConfig(configName) {
+        if (!configName) return { success: false, reason: 'missing_name' };
+        if (configName === 'config_000') {
+            // 默认配置保护：避免误操作导致车队无基础小号（不影响旧逻辑）
+            logWarning('Farming', `⚠️ 默认配置 ${configName} 不允许移除`);
+            return { success: false, reason: 'default_config_protected' };
+        }
+        if (!this.loadedConfigs.has(configName)) {
+            logWarning('Farming', `⚠️ ${configName} 未加载，无法移除`);
+            return { success: false, reason: 'not_loaded' };
+        }
+
+        const set = this.configFollowers.get(configName);
+        const bots = set ? Array.from(set) : [];
+
+        logSection(`移除配置: ${configName}`);
+        logInfo('System', `准备移除 ${bots.length} 个小号（退出房间→登出→移出池子）`);
+
+        // 先把队列/池子里引用摘掉，防止继续被分配/继续登录
+        bots.forEach(bot => {
+            try {
+                bot.removing = true;
+                bot.stopped = true; // 复用旧逻辑的“停止”检查，避免继续 join/重连
+            } catch (e) {}
+        });
+
+        // 移除登录队列中属于该配置的 bot
+        if (Array.isArray(this.pool?.loginQueue) && this.pool.loginQueue.length > 0) {
+            this.pool.loginQueue = this.pool.loginQueue.filter(b => !(b && b.configName === configName));
+        }
+
+        // 移除 idle 池中属于该配置的 bot
+        if (Array.isArray(this.pool?.idle) && this.pool.idle.length > 0) {
+            this.pool.idle = this.pool.idle.filter(b => !(b && b.configName === configName));
+        }
+
+        // assigned map 中属于该配置的 bot 全部剔除
+        if (this.pool?.assigned && typeof this.pool.assigned.forEach === 'function') {
+            const toDelete = [];
+            this.pool.assigned.forEach((arr, lobbyId) => {
+                if (!Array.isArray(arr) || arr.length === 0) return;
+                const next = arr.filter(b => !(b && b.configName === configName));
+                if (next.length === 0) toDelete.push(lobbyId);
+                else if (next.length !== arr.length) this.pool.assigned.set(lobbyId, next);
+            });
+            toDelete.forEach(id => this.pool.assigned.delete(id));
+        }
+
+        let inLobby = 0;
+        let cleaned = 0;
+
+        bots.forEach(bot => {
+            if (!bot) return;
+            try {
+                if (bot.state === FollowerState.IN_LOBBY) {
+                    inLobby++;
+                    // 先发退房消息（如果已在房间）
+                    bot.leaveLobbyForDissolve();
+                }
+            } catch (e) {}
+
+            try {
+                // cleanup 内部会发送 Leave/Abandon 并 logOff（满足“退出房间→退出登录”的要求）
+                bot.cleanup();
+                cleaned++;
+            } catch (e) {}
+
+            // 最后从统计/池子/管理器中摘除引用
+            this.finalizeFollowerRemoval(bot, { from: 'manager.removeConfig' });
+        });
+
+        // 清理映射与状态：允许后续再次 add_config
+        this.loadedConfigs.delete(configName);
+        this.configFollowers.delete(configName);
+
+        logSuccess('Farming', `✅ 已移除 ${configName}: 总${bots.length}，房间内${inLobby}，已清理登出${cleaned}`);
+        return { success: true, count: bots.length, inLobby, cleaned };
     }
 
     // 登录流水线：智能控制登录速度
@@ -1782,7 +2074,10 @@ class FarmingManager {
                 const bot = this.pool.loginQueue.shift();
                 
                 // 只处理 PENDING 状态的小号
-                if (bot.state === FollowerState.PENDING) {
+                // 🔴 新增：移除中的小号直接跳过（不影响旧逻辑）
+                if (bot && bot.removing) {
+                    // skip
+                } else if (bot.state === FollowerState.PENDING) {
                     bot.start();
                 } else {
                     // 不是 PENDING 状态的跳过
@@ -2151,6 +2446,43 @@ process.stdin.on('data', (data) => {
             logInfo('System', `配置名称: ${cmd.configName}`);
             const result = manager.addConfig(cmd.configName);
             console.log(JSON.stringify({ type: 'add_config_result', ...result }));
+            return;
+        }
+
+        // 🔴 新增：移除配置（退出房间→退出登录→退出池子）
+        if (cmd.type === 'remove_config' && cmd.configName) {
+            logSection('收到移除配置命令');
+            logInfo('System', `配置名称: ${cmd.configName}`);
+            const result = manager.removeConfig(cmd.configName);
+            console.log(JSON.stringify({ type: 'remove_config_result', ...result }));
+            return;
+        }
+
+        // 🔴 新增：停止指定挂机主号（释放账号）
+        if (cmd.type === 'stop_leader') {
+            const result = manager.stopLeader({
+                username: cmd.username,
+                index: cmd.index,
+                mode: cmd.mode
+            });
+            console.log(JSON.stringify({ type: 'stop_leader_result', ...result }));
+            return;
+        }
+
+        // 🔴 新增：启动指定挂机主号（加回流程）
+        if (cmd.type === 'start_leader') {
+            const result = manager.startLeader({
+                username: cmd.username,
+                index: cmd.index
+            });
+            console.log(JSON.stringify({ type: 'start_leader_result', ...result }));
+            return;
+        }
+
+        // 🔴 新增：获取主号状态（用于前端显示）
+        if (cmd.type === 'get_leaders_status') {
+            const data = manager.getLeadersStatus();
+            console.log(JSON.stringify({ type: 'leaders_status', data }));
             return;
         }
         

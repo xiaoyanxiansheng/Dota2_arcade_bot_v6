@@ -107,13 +107,30 @@
                         <button @click="toggleProcess('farming', 'start')" :disabled="status.farming" class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">启动</button>
                         <button @click="toggleProcess('farming', 'stop')" :disabled="!status.farming" class="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">停止</button>
                     </div>
+                    <!-- 🔴 主号启停（可停止/可加回） -->
+                    <div class="border-t border-gray-600 pt-2 mt-2">
+                        <label class="text-xs text-gray-400 block mb-1">👑 主号控制</label>
+                        <select v-model="selectedFarmingLeader" :disabled="!status.farming" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-1">
+                            <option value="">-- 选择主号 --</option>
+                            <option v-for="(leader, idx) in farmingLeaders" :key="idx" :value="leader.username">{{ formatFarmingLeaderOption(leader.username) }}</option>
+                        </select>
+                        <div v-if="selectedFarmingLeader" class="text-[11px] text-gray-400 mb-1">
+                            状态：<span :class="isSelectedFarmingLeaderStopped ? 'text-red-300' : 'text-green-300'">{{ isSelectedFarmingLeaderStopped ? '已停止' : '运行中' }}</span>
+                        </div>
+                        <button v-if="!isSelectedFarmingLeaderStopped"
+                                @click="stopFarmingLeader(selectedFarmingLeader)"
+                                :disabled="!status.farming || !selectedFarmingLeader"
+                                class="w-full bg-red-700 hover:bg-red-600 disabled:opacity-50 text-xs py-1 rounded">
+                            停止该主号
+                        </button>
+                        <button v-else
+                                @click="startFarmingLeader(selectedFarmingLeader)"
+                                :disabled="!status.farming || !selectedFarmingLeader"
+                                class="w-full bg-green-700 hover:bg-green-600 disabled:opacity-50 text-xs py-1 rounded">
+                            启动该主号
+                        </button>
+                    </div>
                 </div>
-
-                <!-- 全局操作 -->
-                <button @click="runTool('clear_all')" class="w-full bg-red-800 hover:bg-red-700 text-white py-2 rounded text-sm font-medium mb-4 flex items-center justify-center">
-                    <span v-if="toolStatus.running && toolStatus.name === 'Clear All'" class="animate-spin mr-2">⏳</span>
-                    🧹 清理所有进程
-                </button>
 
                 <div class="border-t border-gray-700 my-2"></div>
                 <div class="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">工具箱</div>
@@ -204,7 +221,6 @@
                     <div class="absolute left-0 top-full bg-gray-700 rounded shadow-lg z-20 hidden group-hover:block min-w-max">
                         <button @click="currentTab = 'log_showcase'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_showcase' ? 'text-blue-400' : 'text-gray-200'">🎭 展示车队</button>
                         <button @click="currentTab = 'log_farming'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_farming' ? 'text-blue-400' : 'text-gray-200'">🌾 挂机车队</button>
-                        <button @click="currentTab = 'log_cleanup'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_cleanup' ? 'text-blue-400' : 'text-gray-200'">🧹 清理日志</button>
                         <button @click="currentTab = 'log_subscribe'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_subscribe' ? 'text-blue-400' : 'text-gray-200'">🗺️ 订阅日志</button>
                         <button @click="currentTab = 'log_query'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_query' ? 'text-blue-400' : 'text-gray-200'">🔍 查询日志</button>
                         <button @click="currentTab = 'log_proxy'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_proxy' ? 'text-blue-400' : 'text-gray-200'">🔌 代理测试</button>
@@ -357,6 +373,9 @@
                                         <button v-if="cfg.name !== 'config_000' && !loadedFarmConfigs.has(cfg.name) && status.farming" 
                                                 @click="addConfigToPool(cfg.name)" 
                                                 class="text-green-400 hover:text-green-300 text-xs">加入池子</button>
+                                        <button v-if="cfg.name !== 'config_000' && loadedFarmConfigs.has(cfg.name) && status.farming"
+                                                @click="removeConfigFromPool(cfg.name)"
+                                                class="text-red-400 hover:text-red-300 text-xs">移除</button>
                                     </td>
                                 </tr>
                                 <tr v-if="farmConfigs.length === 0">
@@ -405,7 +424,7 @@
                 // 独立日志数组（每个分页独立管理，避免互相挤占）
                 const showcaseLogs = ref([]);
                 const farmingLogs = ref([]);
-                const cleanupLogs = ref([]);
+                // 清理所有进程功能已移除（保留变量会导致无用逻辑，这里一并删除）
                 const subscribeLogs = ref([]);
                 const queryLogs = ref([]);
                 const proxyLogs = ref([]);  // 代理测试日志
@@ -450,6 +469,9 @@
                 // 领队列表
                 const showcaseLeaders = ref([]);
                 const selectedShowcaseLeader = ref('');
+                const farmingLeaders = ref([]);
+                const selectedFarmingLeader = ref('');
+                const farmingLeadersStatus = ref({}); // username -> { stopped, state, is_gc_connected, ... }
 
                 // Steam Guard 验证码
                 const steamGuardVisible = ref(false);
@@ -471,7 +493,6 @@
                     const titles = {
                         'log_showcase': '🎭 展示车队日志',
                         'log_farming': '🌾 挂机车队日志',
-                        'log_cleanup': '🧹 清理日志',
                         'log_subscribe': '🗺️ 订阅日志',
                         'log_query': '🔍 查询日志',
                         'log_proxy': '🔌 代理测试日志',
@@ -485,7 +506,6 @@
                     switch (currentTab.value) {
                         case 'log_showcase': return showcaseLogs.value;
                         case 'log_farming': return farmingLogs.value;
-                        case 'log_cleanup': return cleanupLogs.value;
                         case 'log_subscribe': return subscribeLogs.value;
                         case 'log_query': return queryLogs.value;
                         case 'log_proxy': return proxyLogs.value;
@@ -508,11 +528,6 @@
                     if (src === 'farming' || src === 'farming-cleanup' || src === 'stats' ||
                         (src === 'system' && msg.includes('farming'))) {
                         return 'farming';
-                    }
-                    // 清理日志
-                    if (src === 'clear_all' || src === 'clear-all' ||
-                        (src === 'system' && msg.includes('清理所有'))) {
-                        return 'cleanup';
                     }
                     // 订阅日志（精确匹配 source）
                     if (src === 'subscribe_map' ||
@@ -545,7 +560,6 @@
                     switch (category) {
                         case 'showcase': targetLogs = showcaseLogs; break;
                         case 'farming': targetLogs = farmingLogs; break;
-                        case 'cleanup': targetLogs = cleanupLogs; break;
                         case 'subscribe': targetLogs = subscribeLogs; break;
                         case 'query': targetLogs = queryLogs; break;
                         case 'proxy': targetLogs = proxyLogs; break;
@@ -561,7 +575,6 @@
                     switch (currentTab.value) {
                         case 'log_showcase': showcaseLogs.value = []; break;
                         case 'log_farming': farmingLogs.value = []; break;
-                        case 'log_cleanup': cleanupLogs.value = []; break;
                         case 'log_subscribe': subscribeLogs.value = []; break;
                         case 'log_query': queryLogs.value = []; break;
                         case 'log_proxy': proxyLogs.value = []; break;
@@ -709,11 +722,29 @@
                             farmingStats.value = null;
                             farmingProgress.value = null;
                             farmingTotalStartTime = null;
+                            farmingLeadersStatus.value = {};
                             if (farmingElapsedTimer) {
                                 clearInterval(farmingElapsedTimer);
                                 farmingElapsedTimer = null;
                             }
                         }
+                        
+                        // 挂机车队启动后，拉一次主号状态
+                        if (newStatus.farming === true) {
+                            refreshFarmingLeadersStatus();
+                        }
+                    });
+
+                    // farming 主号状态推送（来自 server.js 转发）
+                    socket.on('farmingLeadersStatus', (payload) => {
+                        const list = payload?.data || [];
+                        const map = {};
+                        list.forEach(item => {
+                            if (item && item.username) {
+                                map[item.username] = item;
+                            }
+                        });
+                        farmingLeadersStatus.value = map;
                     });
                     
                     socket.on('toolStatus', (newToolStatus) => {
@@ -847,9 +878,7 @@
 
                 const runTool = async (name, body = {}) => {
                     // 根据工具类型切换到对应日志页签
-                    if (name === 'clear_all') {
-                        currentTab.value = 'log_cleanup';
-                    } else if (name === 'subscribe_map') {
+                    if (name === 'subscribe_map') {
                         currentTab.value = 'log_subscribe';
                     } else if (name === 'list_lobbies') {
                         currentTab.value = 'log_query';
@@ -879,6 +908,16 @@
                         const showcaseRes = await fetch('/api/config/showcase');
                         const showcaseData = await showcaseRes.json();
                         showcaseLeaders.value = showcaseData.showcase_leaders || [];
+
+                        // 加载挂机车队主号（来自 config_leaders.json）
+                        const leadersRes = await fetch('/api/config/leaders');
+                        const leadersData = await leadersRes.json();
+                        farmingLeaders.value = leadersData.leaders || [];
+                        
+                        // 如果挂机车队在运行，顺便拉一次主号状态（用于显示“已停止/运行中”）
+                        if (status.value?.farming) {
+                            refreshFarmingLeadersStatus();
+                        }
                         
                         // 加载测试项目 ID
                         if (showcaseData.global_settings && showcaseData.global_settings.custom_game_id) {
@@ -888,6 +927,83 @@
                         console.error('加载领队列表失败', e);
                     }
                 };
+
+                // 🔴 新增：停止指定挂机主号
+                const stopFarmingLeader = async (username) => {
+                    if (!username) return;
+                    if (!confirm(`确定停止挂机主号：${username}？\n\n该主号会退出挂机流程并登出。`)) return;
+                    currentTab.value = 'log_farming';
+                    try {
+                        const res = await fetch('/api/farming/stop_leader', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username, mode: 'immediate' })
+                        });
+                        if (!res.ok) {
+                            const err = await res.json();
+                            alert('操作失败: ' + err.error);
+                        } else {
+                            await refreshFarmingLeadersStatus();
+                        }
+                    } catch (e) {
+                        alert('请求失败: ' + e.message);
+                    }
+                };
+
+                // 🔴 新增：启动指定挂机主号（加回流程）
+                const startFarmingLeader = async (username) => {
+                    if (!username) return;
+                    if (!confirm(`确定启动挂机主号：${username}？\n\n该主号会重新加入挂机流程。`)) return;
+                    currentTab.value = 'log_farming';
+                    try {
+                        const res = await fetch('/api/farming/start_leader', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username })
+                        });
+                        if (!res.ok) {
+                            const err = await res.json();
+                            alert('操作失败: ' + err.error);
+                        } else {
+                            await refreshFarmingLeadersStatus();
+                        }
+                    } catch (e) {
+                        alert('请求失败: ' + e.message);
+                    }
+                };
+
+                // 🔴 新增：刷新挂机主号状态（从 farming 进程获取）
+                const refreshFarmingLeadersStatus = async () => {
+                    try {
+                        const res = await fetch('/api/farming/leaders_status');
+                        if (!res.ok) return;
+                        const json = await res.json();
+                        const list = json?.data || [];
+                        const map = {};
+                        list.forEach(item => {
+                            if (item && item.username) {
+                                map[item.username] = item;
+                            }
+                        });
+                        farmingLeadersStatus.value = map;
+                    } catch (e) {
+                        // 忽略错误，不影响主界面
+                    }
+                };
+
+                // 选项展示：用户名 + 状态
+                const formatFarmingLeaderOption = (username) => {
+                    const st = farmingLeadersStatus.value?.[username];
+                    if (!st) return username;
+                    return `${username} (${st.stopped ? '已停止' : '运行中'})`;
+                };
+
+                const isSelectedFarmingLeaderStopped = computed(() => {
+                    const u = selectedFarmingLeader.value;
+                    if (!u) return false;
+                    const st = farmingLeadersStatus.value?.[u];
+                    return !!st?.stopped;
+                });
 
                 const verifyLeader = async (type, username) => {
                     if (!username) return;
@@ -1013,6 +1129,27 @@
                     }
                 };
 
+                // 🔴 新增：将配置从小号池子移除（退房→登出→退出池子）
+                const removeConfigFromPool = async (configName) => {
+                    if (!confirm(`确定将 ${configName} 从池子移除？\n\n注意：会让该配置已登录的小号退出房间并登出。`)) return;
+                    try {
+                        const res = await fetch('/api/farm/remove_from_pool', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ configName })
+                        });
+                        if (res.ok) {
+                            loadedFarmConfigs.value.delete(configName);
+                            loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                        } else {
+                            const err = await res.json();
+                            alert('操作失败: ' + err.error);
+                        }
+                    } catch (e) {
+                        alert('请求失败');
+                    }
+                };
+
                 // 格式化运行时间
                 const formatElapsed = (seconds) => {
                     if (!seconds) return '0秒';
@@ -1090,6 +1227,8 @@
                     configContent, loadConfig, saveConfig, saveMessage,
                     searchGameId, queryGameId, toolGameId, subscribeConfigName,
                     showcaseLeaders, selectedShowcaseLeader,
+                    farmingLeaders, selectedFarmingLeader, stopFarmingLeader, startFarmingLeader,
+                    refreshFarmingLeadersStatus, formatFarmingLeaderOption, isSelectedFarmingLeaderStopped,
                     loadLeaders, verifyLeader,
                     steamGuardVisible, steamGuardDomain, steamGuardCode, 
                     submitSteamGuard, cancelSteamGuard,
@@ -1101,6 +1240,7 @@
                     farmFollowersContent,
                     refreshFarmConfigs, showFarmConfigs, addFarmConfig, editFarmConfig,
                     saveFarmConfig, addConfigToPool, formatElapsed,
+                    removeConfigFromPool,
                     // 工具进度
                     subscribeProgress, proxyProgress, replaceProxies,
                     // 主号测试
