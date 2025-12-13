@@ -826,32 +826,39 @@ class ShowcaseManager {
                 `Presence检查 主号${bot.label}: 当前房间=${myLobbyId || '无'} | 游廊=${lobbyCount} | 阈值=${minLobbyCountForRotation} | 在展示位=${inList ? '是' : '否'} | 房龄=${roomAgeMin}m/${rotationCycleMinutes || 0}m`
             );
 
-            // ===== 新增护栏：仅当“连续消失超过 rotation_cycle_minutes”才按“不在列表”触发创建 =====
+            // ===== 稳定护栏：避免单次/短暂查询抖动导致误重建 =====
+            // 注意：rotation_cycle_minutes 只表示“房龄到期必须刷新”，不能用于“消失阈值”。
+            // 这里用“两次查询确认窗口”：默认 presence_query_interval_minutes * 2（例如 2min * 2 = 4min），不新增配置项。
             if (myLobbyId && inList) {
                 bot.missingSince = 0; // 已看到，清零
             }
             if (myLobbyId && !inList) {
-                const missingThresholdMs = rotationCycleMinutes > 0 ? rotationCycleMinutes * 60 * 1000 : 0;
+                const queryIntervalMin = this.settings.presence_query_interval_minutes || 2;
+                const missingGraceMinutes = Math.max(2, queryIntervalMin * 2);
+                const missingThresholdMs = missingGraceMinutes * 60 * 1000;
                 const now = Date.now();
                 if (!bot.missingSince) bot.missingSince = now;
                 const missingMs = now - bot.missingSince;
                 const missingMinutes = Math.floor(missingMs / 60000);
 
-                // 如果配置了 rotation_cycle_minutes，则“未超过阈值”时不触发创建（稳定优先）
+                // 未超过“二次确认窗口”时不触发创建（稳定优先）
                 // 但如果房龄已过期（expiredByAge），则必须刷新，不能被此护栏挡住
-                if (!expiredByAge && missingThresholdMs > 0 && missingMs < missingThresholdMs) {
-                    logInfo('Showcase', `主号${bot.label} 暂时不在展示位（消失${missingMinutes}m<${rotationCycleMinutes}m），等待下轮...`);
+                if (!expiredByAge && missingMs < missingThresholdMs) {
+                    logInfo('Showcase', `主号${bot.label} 暂时不在展示位（消失${missingMinutes}m<${missingGraceMinutes}m），等待下轮...`);
                     return;
                 }
                 // 超过阈值：允许按原逻辑继续触发创建
             }
 
-            // 没有房间 或 房龄过期(>=rotation_cycle_minutes) 或 (消失超过阈值后)不在列表 → 创建新房间 + 结算1个
+            // 没有房间 / 房龄过期(>=rotation_cycle_minutes) / (消失超过二次确认窗口后)不在列表 → 创建新房间 + 结算1个
             if (!myLobbyId || expiredByAge || !inList) {
-                if (expiredByAge) {
+                if (!myLobbyId) {
+                    logInfo('Showcase', `主号${bot.label} 当前无房间，创建新房...`);
+                } else if (expiredByAge) {
                     logInfo('Showcase', `主号${bot.label} 房间已过期(${roomAgeMin}m>=${rotationCycleMinutes}m)，强制刷新创建新房...`);
+                } else {
+                    logInfo('Showcase', `主号${bot.label} 未在展示位，创建新房并结算 1 个最老挂机房...`);
                 }
-                logInfo('Showcase', `主号${bot.label} 未在展示位，创建新房并结算 1 个最老挂机房...`);
 
                 // 如果有旧房间，先离开（确保“新房”是新的 lobbyId）
                 if (bot.currentLobbyId) {
