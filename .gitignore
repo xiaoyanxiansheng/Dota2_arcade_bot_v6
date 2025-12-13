@@ -1,0 +1,5 @@
+# Ignore runtime/generated folders
+logs/
+config/
+
+
