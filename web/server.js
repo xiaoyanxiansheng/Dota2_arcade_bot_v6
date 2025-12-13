@@ -23,7 +23,7 @@ const DATA_DIR = path.join(PROJECT_ROOT, 'data');
 const processes = {
     showcase: { process: null, startTime: null },
     farming: { process: null, startTime: null },
-    tool: { process: null, name: null } // 当前运行的工具脚本
+    tool: { process: null, name: null, gameId: null } // 当前运行的工具脚本
 };
 
 // 帮助函数：广播日志
@@ -78,6 +78,48 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT, logSource = null) 
                     const domain = line.replace('[STEAM_GUARD]', '').trim();
                     io.emit('needSteamGuard', { key, domain });
                 }
+                // 检测房间创建成功信号，自动触发 list_lobbies
+                if (line.includes('[ROOM_CREATED]') && processes.tool.gameId) {
+                    const gameIdForQuery = processes.tool.gameId;
+                    broadcastLog('test_leader', '🔍 房间创建成功，2秒后自动查询房间列表...', 'info');
+                    // 延迟 2 秒后运行 list_lobbies（等待房间同步）
+                    setTimeout(() => {
+                        const listArgs = ['commands/list_lobbies.js', gameIdForQuery];
+                        broadcastLog('test_leader', `📋 开始查询游戏ID: ${gameIdForQuery}`, 'info');
+                        const listChild = spawn('node', listArgs, { cwd: PROJECT_ROOT });
+                        
+                        listChild.on('error', (err) => {
+                            broadcastLog('test_leader', `❌ 查询启动失败: ${err.message}`, 'error');
+                        });
+                        
+                        listChild.stdout.on('data', (data) => {
+                            const lines = data.toString().split('\n');
+                            lines.forEach(l => {
+                                if (l.trim()) {
+                                    // 同时输出到 test_leader 和 list_lobbies
+                                    broadcastLog('test_leader', l, 'info');
+                                    broadcastLog('list_lobbies', l, 'info');
+                                }
+                            });
+                        });
+                        listChild.stderr.on('data', (data) => {
+                            const lines = data.toString().split('\n');
+                            lines.forEach(l => {
+                                if (l.trim()) {
+                                    broadcastLog('test_leader', l, 'error');
+                                    broadcastLog('list_lobbies', l, 'error');
+                                }
+                            });
+                        });
+                        listChild.on('close', (code) => {
+                            const msg = code === 0 ? '✅ 查询完成' : `❌ 查询失败 (code: ${code})`;
+                            broadcastLog('test_leader', msg, code === 0 ? 'info' : 'error');
+                            broadcastLog('list_lobbies', `查询完成 (code: ${code})`, code === 0 ? 'info' : 'error');
+                        });
+                    }, 2000);
+                    // 不输出 [ROOM_CREATED] 到日志
+                    return;
+                }
                 broadcastLog(source, line, 'info');
             }
         });
@@ -102,6 +144,7 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT, logSource = null) 
         if (key === 'tool') {
             processes.tool.name = null;
             processes.tool.logSource = null;
+            processes.tool.gameId = null;
             io.emit('toolStatus', { running: false, name: null });
         }
     });
@@ -615,6 +658,25 @@ app.post('/api/tool/:name', (req, res) => {
         // 清理所有
         args = ['commands/clear_all.js'];
         processes.tool.name = 'Clear All';
+        
+    } else if (name === 'test_leader') {
+        // 测试挂机主号：需要 username, password, gameId，可选 proxy, shared_secret
+        const { username, password, proxy, shared_secret, gameId } = body;
+        if (!username || !password) {
+            return res.status(400).json({ error: '缺少账号或密码' });
+        }
+        if (!gameId) {
+            return res.status(400).json({ error: '请先在上方输入游戏ID' });
+        }
+        args = ['commands/test_leader.js', username, password];
+        // 注意：参数顺序必须是 proxy, shared_secret, gameId
+        // 如果没有 proxy 或 shared_secret，用空字符串占位
+        args.push(proxy || '');
+        args.push(shared_secret || '');
+        args.push(gameId);
+        processes.tool.name = `Test Leader: ${username}`;
+        processes.tool.logSource = 'test_leader';
+        processes.tool.gameId = gameId;  // 保存 gameId 用于自动查询
         
     } else {
         return res.status(400).json({ error: 'Unknown tool' });

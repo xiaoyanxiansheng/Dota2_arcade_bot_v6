@@ -162,6 +162,29 @@
                     </button>
                 </div>
 
+                <div class="border-t border-gray-700 my-2"></div>
+                <div class="px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">主号测试</div>
+
+                <!-- 测试挂机主号 -->
+                <div class="bg-gray-700/50 rounded p-3 mb-2">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-xs font-medium">👑 测试挂机主号</span>
+                    </div>
+                    <input v-model="testLeader.username" placeholder="账号" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-1">
+                    <input v-model="testLeader.password" type="password" placeholder="密码" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-1">
+                    <input v-model="testLeader.proxy" placeholder="代理 (可选)" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-1">
+                    <input v-model="testLeader.shared_secret" placeholder="shared_secret (可选)" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-2">
+                    <div class="flex space-x-2">
+                        <button @click="startTestLeader" :disabled="toolStatus.running || !testLeader.username || !testLeader.password" class="flex-1 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-xs py-1.5 rounded flex items-center justify-center">
+                            <span v-if="toolStatus.running && toolStatus.name?.startsWith('Test Leader')" class="animate-spin mr-1">⏳</span>
+                            🏠 创建房间
+                        </button>
+                        <button @click="stopTestLeader" :disabled="!toolStatus.running || !toolStatus.name?.startsWith('Test Leader')" class="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-xs py-1.5 rounded">
+                            🚪 退出房间
+                        </button>
+                    </div>
+                </div>
+
             </nav>
             
             <div class="p-4 border-t border-gray-700 text-xs text-gray-500 text-center">
@@ -185,6 +208,7 @@
                         <button @click="currentTab = 'log_subscribe'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_subscribe' ? 'text-blue-400' : 'text-gray-200'">🗺️ 订阅日志</button>
                         <button @click="currentTab = 'log_query'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_query' ? 'text-blue-400' : 'text-gray-200'">🔍 查询日志</button>
                         <button @click="currentTab = 'log_proxy'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_proxy' ? 'text-blue-400' : 'text-gray-200'">🔌 代理测试</button>
+                        <button @click="currentTab = 'log_testleader'" class="block w-full text-left px-4 py-2 text-sm hover:bg-gray-600 whitespace-nowrap" :class="currentTab === 'log_testleader' ? 'text-blue-400' : 'text-gray-200'">👑 主号测试</button>
                     </div>
                 </div>
                 <button @click="loadConfig('showcase')" :class="currentTab === 'config_showcase' ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-gray-200'" class="px-4 py-3 border-b-2 font-medium text-sm transition">展示配置</button>
@@ -385,7 +409,16 @@
                 const subscribeLogs = ref([]);
                 const queryLogs = ref([]);
                 const proxyLogs = ref([]);  // 代理测试日志
+                const testLeaderLogs = ref([]);  // 主号测试日志
                 const LOG_LIMIT = 1000;  // 每个分页的日志上限
+                
+                // 主号测试表单
+                const testLeader = ref({
+                    username: '',
+                    password: '',
+                    proxy: '',
+                    shared_secret: ''
+                });
                 
                 const currentTab = ref('log_farming');
                 const logContainer = ref(null);
@@ -441,7 +474,8 @@
                         'log_cleanup': '🧹 清理日志',
                         'log_subscribe': '🗺️ 订阅日志',
                         'log_query': '🔍 查询日志',
-                        'log_proxy': '🔌 代理测试日志'
+                        'log_proxy': '🔌 代理测试日志',
+                        'log_testleader': '👑 主号测试日志'
                     };
                     return titles[currentTab.value] || '系统日志';
                 });
@@ -455,6 +489,7 @@
                         case 'log_subscribe': return subscribeLogs.value;
                         case 'log_query': return queryLogs.value;
                         case 'log_proxy': return proxyLogs.value;
+                        case 'log_testleader': return testLeaderLogs.value;
                         default: return farmingLogs.value;
                     }
                 });
@@ -494,6 +529,11 @@
                         (src === 'system' && msg.includes('test_proxies'))) {
                         return 'proxy';
                     }
+                    // 主号测试日志（精确匹配 source）
+                    if (src === 'test_leader' ||
+                        (src === 'system' && msg.includes('test_leader'))) {
+                        return 'testleader';
+                    }
                     // 默认归入挂机车队
                     return 'farming';
                 };
@@ -509,6 +549,7 @@
                         case 'subscribe': targetLogs = subscribeLogs; break;
                         case 'query': targetLogs = queryLogs; break;
                         case 'proxy': targetLogs = proxyLogs; break;
+                        case 'testleader': targetLogs = testLeaderLogs; break;
                         default: targetLogs = farmingLogs;
                     }
                     targetLogs.value.push(log);
@@ -524,6 +565,7 @@
                         case 'log_subscribe': subscribeLogs.value = []; break;
                         case 'log_query': queryLogs.value = []; break;
                         case 'log_proxy': proxyLogs.value = []; break;
+                        case 'log_testleader': testLeaderLogs.value = []; break;
                     }
                 };
 
@@ -756,6 +798,50 @@
                         }
                     } catch (e) {
                         alert('❌ 请求失败: ' + e.message);
+                    }
+                };
+                
+                // 测试挂机主号：创建房间
+                const startTestLeader = async () => {
+                    if (!testLeader.value.username || !testLeader.value.password) {
+                        alert('请输入账号和密码');
+                        return;
+                    }
+                    if (!toolGameId.value) {
+                        alert('请先在上方「游戏ID」输入框填写游戏ID');
+                        return;
+                    }
+                    currentTab.value = 'log_testleader';
+                    try {
+                        const res = await fetch('/api/tool/test_leader', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                username: testLeader.value.username,
+                                password: testLeader.value.password,
+                                proxy: testLeader.value.proxy || undefined,
+                                shared_secret: testLeader.value.shared_secret || undefined,
+                                gameId: toolGameId.value
+                            })
+                        });
+                        if (!res.ok) {
+                            const err = await res.json();
+                            alert('操作失败: ' + err.error);
+                        }
+                    } catch (e) {
+                        alert('请求失败: ' + e.message);
+                    }
+                };
+                
+                // 测试挂机主号：退出房间
+                const stopTestLeader = async () => {
+                    try {
+                        // 发送 "leave" 命令到 stdin
+                        const resp = await fetch('/api/tool/stop', { method: 'POST' });
+                        const data = await resp.json();
+                        console.log('停止测试主号:', data);
+                    } catch (e) {
+                        alert('停止失败: ' + e.message);
                     }
                 };
 
@@ -1016,7 +1102,9 @@
                     refreshFarmConfigs, showFarmConfigs, addFarmConfig, editFarmConfig,
                     saveFarmConfig, addConfigToPool, formatElapsed,
                     // 工具进度
-                    subscribeProgress, proxyProgress, replaceProxies
+                    subscribeProgress, proxyProgress, replaceProxies,
+                    // 主号测试
+                    testLeader, startTestLeader, stopTestLeader
                 };
             }
         }).mount('#app');
