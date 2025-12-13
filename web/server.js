@@ -791,6 +791,17 @@ app.post('/api/tool/:name', (req, res) => {
         args = ['commands/test_proxies.js'];
         processes.tool.name = 'Test Proxies';
         
+    } else if (name === 'cleanup_config') {
+        // 清理某个 farm 配置的小号（退出房间/登出）
+        const configName = body.configName || '';
+        if (!configName) {
+            return res.status(400).json({ error: '缺少 configName' });
+        }
+        args = ['commands/cleanup_config.js', configName];
+        processes.tool.name = `Cleanup Config: ${configName}`;
+        // 归类到挂机日志
+        processes.tool.logSource = 'farming';
+
     } else if (name === 'test_leader') {
         // 测试挂机主号：需要 username, password, gameId，可选 proxy, shared_secret
         const { username, password, proxy, shared_secret, gameId } = body;

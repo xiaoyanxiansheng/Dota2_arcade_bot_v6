@@ -130,6 +130,18 @@
                             启动该主号
                         </button>
                     </div>
+
+                    <!-- 🔴 新增：停服后残留清理（独立工具，不依赖挂机车队进程） -->
+                    <div class="border-t border-gray-600 pt-2 mt-2">
+                        <label class="text-xs text-gray-400 block mb-1">🧨 残留清理（按配置）</label>
+                        <select v-model="cleanupConfigName" class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs mb-1">
+                            <option value="">-- 选择配置 --</option>
+                            <option v-for="cfg in farmConfigs" :key="cfg.name" :value="cfg.name">{{ cfg.name }} ({{ cfg.followers }}人)</option>
+                        </select>
+                        <button @click="cleanupConfigNow" :disabled="toolStatus.running || !cleanupConfigName" class="w-full bg-red-800 hover:bg-red-700 disabled:opacity-50 text-xs py-1 rounded">
+                            暴力清理该配置账号
+                        </button>
+                    </div>
                 </div>
 
                 <div class="border-t border-gray-700 my-2"></div>
@@ -459,6 +471,7 @@
                 const farmConfigs = ref([]);
                 const editingFarmConfig = ref(null);
                 const loadedFarmConfigs = ref(new Set(['config_000'])); // 已加入池子的配置（默认 config_000）
+                const cleanupConfigName = ref('');
 
                 // 工具参数
                 const searchGameId = ref('');
@@ -767,6 +780,8 @@
 
                     // 加载领队列表
                     loadLeaders();
+                    // 预加载 farm 配置列表（侧边栏“残留清理”下拉使用）
+                    refreshFarmConfigs();
                     
                     // 原生事件监听：停止订阅按钮（解决 Vue 事件绑定问题）
                     document.addEventListener('click', async (e) => {
@@ -1034,6 +1049,15 @@
                     }
                 };
 
+                // 停服后残留清理（按配置运行独立工具）
+                const cleanupConfigNow = () => {
+                    const name = cleanupConfigName.value;
+                    if (!name) return;
+                    if (!confirm(`确定暴力清理 ${name}？\n\n将尝试让该配置的小号退出房间并登出（独立工具运行，不依赖挂机车队）。`)) return;
+                    currentTab.value = 'log_farming';
+                    runTool('cleanup_config', { configName: name });
+                };
+
                 const showFarmConfigs = () => {
                     currentTab.value = 'farm_configs';
                     refreshFarmConfigs();
@@ -1241,6 +1265,8 @@
                     refreshFarmConfigs, showFarmConfigs, addFarmConfig, editFarmConfig,
                     saveFarmConfig, addConfigToPool, formatElapsed,
                     removeConfigFromPool,
+                    // 残留清理
+                    cleanupConfigName, cleanupConfigNow,
                     // 工具进度
                     subscribeProgress, proxyProgress, replaceProxies,
                     // 主号测试
