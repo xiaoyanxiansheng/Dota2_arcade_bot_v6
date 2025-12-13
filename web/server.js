@@ -229,6 +229,31 @@ app.post('/api/dissolve_rooms', (req, res) => {
     res.json({ success: true, message: `已广播解散 ${roomIds.length} 个房间` });
 });
 
+// 结算房间请求（展示车队调用：由挂机车队自行选择“可解散”的房间）
+app.post('/api/settle_rooms', (req, res) => {
+    const count = Number(req.body?.count || 1);
+    const excludeRoomIds = Array.isArray(req.body?.excludeRoomIds) ? req.body.excludeRoomIds : [];
+
+    if (!Number.isFinite(count) || count <= 0) {
+        return res.status(400).json({ error: '无效的 count' });
+    }
+
+    broadcastLog('System', `收到结算请求: count=${count} exclude=${excludeRoomIds.length}`, 'info');
+
+    // 广播给所有挂机车队进程（前端/多进程兼容）
+    io.emit('settleRooms', { count, excludeRoomIds });
+
+    if (processes.farming.process && processes.farming.process.stdin) {
+        const command = JSON.stringify({ type: 'settle_rooms', count, excludeRoomIds }) + '\n';
+        processes.farming.process.stdin.write(command);
+        broadcastLog('System', `已发送结算命令到挂机车队`, 'success');
+    } else {
+        broadcastLog('System', `挂机车队未运行，无法发送结算命令`, 'warning');
+    }
+
+    res.json({ success: true, message: `已请求结算 ${count} 个房间` });
+});
+
 // 读取配置
 app.get('/api/config/:type', (req, res) => {
     const type = req.params.type; // showcase | leaders

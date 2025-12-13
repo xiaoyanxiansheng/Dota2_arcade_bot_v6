@@ -102,6 +102,8 @@ const k_EMsgGCPracticeLobbyJoinResponse = 7113;
 const k_EMsgGCReadyUp = 7070;
 const k_EMsgGCReadyUpStatus = 7170;
 const k_EMsgGCPracticeLobbySetTeamSlot = 7047;
+const k_EMsgGCJoinableCustomLobbiesRequest = 7468;
+const k_EMsgGCJoinableCustomLobbiesResponse = 7469;
 const k_EMsgProtoMask = 0x80000000;
 
 // SOCache 消息 ID
@@ -149,7 +151,8 @@ const DOTALobbyReadyState = {
 // Proto 定义加载
 // ============================================
 let CMsgClientHello, CMsgPracticeLobbyJoin, CMsgPracticeLobbyJoinResponse, CMsgPracticeLobbyCreate, 
-    CMsgPracticeLobbySetDetails, CMsgPracticeLobbySetTeamSlot, CMsgReadyUp, CSODOTALobby;
+    CMsgPracticeLobbySetDetails, CMsgPracticeLobbySetTeamSlot, CMsgReadyUp, CSODOTALobby,
+    CMsgJoinableCustomLobbiesRequest, CMsgJoinableCustomLobbiesResponse;
 let CMsgSOSingleObject, CMsgSOMultipleObjects, CMsgSOCacheSubscribed;
 
 try {
@@ -183,6 +186,8 @@ try {
     CMsgPracticeLobbySetTeamSlot = root.lookupType("CMsgPracticeLobbySetTeamSlot");
     CMsgReadyUp = root.lookupType("CMsgReadyUp");
     CSODOTALobby = root.lookupType("CSODOTALobby");
+    CMsgJoinableCustomLobbiesRequest = root.lookupType("CMsgJoinableCustomLobbiesRequest");
+    CMsgJoinableCustomLobbiesResponse = root.lookupType("CMsgJoinableCustomLobbiesResponse");
     CMsgSOSingleObject = root.lookupType("CMsgSOSingleObject");
     CMsgSOMultipleObjects = root.lookupType("CMsgSOMultipleObjects");
     CMsgSOCacheSubscribed = root.lookupType("CMsgSOCacheSubscribed");
@@ -604,6 +609,12 @@ class FollowerBot {
                     this.pool.addToIdle(this);
                 }, 1000);
             }
+        }
+        else if (cleanMsgType === k_EMsgGCJoinableCustomLobbiesResponse) {
+            // 由 manager 统一处理查询结果（仅在结算/工具查询时使用）
+            try {
+                this.manager.onJoinableCustomLobbiesResponse(this, payload);
+            } catch (e) {}
         }
         else if (cleanMsgType === k_EMsgGCPracticeLobbyJoinResponse) {
             try {
@@ -1222,6 +1233,12 @@ class LeaderBot {
                 setTimeout(() => this.createRoom(), 1000);
             }
         }
+        else if (cleanMsgType === k_EMsgGCJoinableCustomLobbiesResponse) {
+            // 由 manager 统一处理查询结果（仅在结算/工具查询时使用）
+            try {
+                this.manager.onJoinableCustomLobbiesResponse(this, payload);
+            } catch (e) {}
+        }
         else if (cleanMsgType === k_EMsgGCSOCacheSubscribed) {
             try {
                 const msg = CMsgSOCacheSubscribed.decode(payload);
@@ -1544,6 +1561,13 @@ class FarmingManager {
         
         // 代理使用统计
         this.proxyStats = new Map();  // proxy -> { used, success, failed, activeConnections }
+
+        // 结算/查询：JoinableCustomLobbies 请求（并发安全：队列 + 单飞行请求）
+        this._lobbyQueryCallbacks = [];
+        this._lobbyQueryInFlight = false;
+        this._lobbyQueryTimeoutHandle = null;
+        this._lobbyQueryFinish = null;
+        this._lobbyQuerySender = null;
     }
 
     // 获取随机代理（带统计）- 小号专用
@@ -1797,6 +1821,146 @@ class FarmingManager {
         };
     }
 
+    // GC 回调：JoinableCustomLobbiesResponse（由 Follower/Leader 转发）
+    onJoinableCustomLobbiesResponse(senderBot, payload) {
+        if (!this._lobbyQueryFinish) return;
+        if (this._lobbyQuerySender && senderBot !== this._lobbyQuerySender) return;
+
+        try {
+            const response = CMsgJoinableCustomLobbiesResponse.decode(payload);
+            const lobbies = response.lobbies || [];
+            this._lobbyQueryFinish(lobbies, { ok: true });
+        } catch (e) {
+            this._lobbyQueryFinish([], { ok: false, reason: 'decode_error' });
+        }
+    }
+
+    // 查询 joinable lobby 列表（用于选择“可解散”的房间）
+    queryLobbyListDetailed() {
+        return new Promise((resolve) => {
+            // 选择一个可用的 GC 连接（优先主号，其次任意在线小号）
+            const sender =
+                this.leaders.find(b => b && b.is_gc_connected && b.client) ||
+                this.allFollowers.find(b => b && b.is_gc_connected && b.client);
+
+            if (!sender) {
+                resolve({ lobbies: [], ok: false, meta: { reason: 'no_gc_sender' } });
+                return;
+            }
+
+            this._lobbyQueryCallbacks.push(resolve);
+
+            // 已有请求在飞，直接排队等待同一结果
+            if (this._lobbyQueryInFlight) return;
+            this._lobbyQueryInFlight = true;
+            this._lobbyQuerySender = sender;
+
+            const timeoutMs = this.settings.lobby_query_timeout_ms || 20000;
+            let finished = false;
+
+            const finish = (lobbies, meta) => {
+                if (finished) return;
+                finished = true;
+
+                this._lobbyQueryInFlight = false;
+                this._lobbyQuerySender = null;
+                this._lobbyQueryFinish = null;
+
+                if (this._lobbyQueryTimeoutHandle) {
+                    clearTimeout(this._lobbyQueryTimeoutHandle);
+                    this._lobbyQueryTimeoutHandle = null;
+                }
+
+                const callbacks = this._lobbyQueryCallbacks;
+                this._lobbyQueryCallbacks = [];
+
+                callbacks.forEach((cb) => {
+                    try { cb({ lobbies, ok: !!meta?.ok, meta }); } catch (e) {}
+                });
+            };
+
+            this._lobbyQueryFinish = finish;
+
+            try {
+                const payload = {
+                    server_region: 0,
+                    custom_game_id: Long.fromString(this.settings.custom_game_id, true)
+                };
+                const message = CMsgJoinableCustomLobbiesRequest.create(payload);
+                const buffer = CMsgJoinableCustomLobbiesRequest.encode(message).finish();
+                sender.client.sendToGC(this.settings.target_app_id, k_EMsgGCJoinableCustomLobbiesRequest | k_EMsgProtoMask, {}, buffer);
+            } catch (err) {
+                finish([], { ok: false, reason: 'send_error' });
+                return;
+            }
+
+            this._lobbyQueryTimeoutHandle = setTimeout(() => {
+                finish([], { ok: false, reason: 'timeout' });
+            }, timeoutMs);
+        });
+    }
+
+    // 自动结算：选择“可解散且无陌生人”的房间并解散（默认 1 个）
+    async settleRooms(count = 1, excludeRoomIds = []) {
+        const need = Math.max(1, Number(count) || 1);
+        const excludeSet = new Set((excludeRoomIds || []).map(x => x?.toString()).filter(Boolean));
+
+        logSection('自动结算房间');
+        logInfo('System', `请求结算: ${need} 个 | 排除: ${excludeSet.size} 个房间`);
+
+        const { lobbies, ok, meta } = await this.queryLobbyListDetailed();
+        if (!ok || !lobbies || lobbies.length === 0) {
+            logWarning('System', `结算跳过：查询无效/空列表 (reason=${meta?.reason || 'unknown'})`);
+            return;
+        }
+
+        // 统计我方“已在房间内”的小号分布（只有 IN_LOBBY 才能保证可退出）
+        const inLobbyCountByRoom = {};
+        this.allFollowers.forEach(f => {
+            const lobbyId = f.currentLobbyId?.toString();
+            if (!lobbyId) return;
+            if (f.state !== FollowerState.IN_LOBBY) return;
+            inLobbyCountByRoom[lobbyId] = (inLobbyCountByRoom[lobbyId] || 0) + 1;
+        });
+
+        const targetGameId = this.settings.custom_game_id;
+
+        // 候选规则（安全优先）：
+        // - 必须是本游戏
+        // - 必须是带密码房（我方房间必带密码）
+        // - 必须能证明“房间内全部成员都是我方可控小号”：memberCount === 我方 IN_LOBBY 小号数
+        //   （这样清空后房间会真正消失，不会出现“别人的房间/有陌生人”导致解散无效）
+        const candidates = lobbies
+            .filter(l => l.customGameId?.toString() === targetGameId)
+            .filter(l => l.hasPassKey === true)
+            .filter(l => !excludeSet.has(l.lobbyId?.toString()))
+            .map(l => {
+                const id = l.lobbyId?.toString();
+                const ourInLobby = id ? (inLobbyCountByRoom[id] || 0) : 0;
+                return {
+                    lobbyId: id,
+                    memberCount: l.memberCount || 0,
+                    ourInLobby,
+                    createdAt: l.lobbyCreationTime || 0
+                };
+            })
+            .filter(x => x.lobbyId && x.ourInLobby > 0 && x.memberCount === x.ourInLobby)
+            .sort((a, b) => a.createdAt - b.createdAt); // 在“可解散”前提下优先最老
+
+        if (candidates.length === 0) {
+            logWarning('System', `结算失败：未找到“可解散且无陌生人”的房间（安全跳过，不误解散）`);
+            return;
+        }
+
+        const chosen = candidates.slice(0, need);
+        logInfo('System', `已选择 ${chosen.length}/${need} 个可解散房间：`);
+        chosen.forEach((x, idx) => {
+            logInfo('System', `   ${idx + 1}. ${x.lobbyId} | member=${x.memberCount} | our=${x.ourInLobby}`);
+        });
+
+        this.dissolveRooms(chosen.map(x => x.lobbyId));
+    }
+
     // 解散指定房间（让在这些房间中的小号退出）
     dissolveRooms(roomIds) {
         if (!roomIds || roomIds.length === 0) {
@@ -1905,7 +2069,7 @@ if (!fs.existsSync(config000Path)) {
 const manager = new FarmingManager(leadersConfig);
 manager.start();
 
-// 状态监控（每30秒输出一次）
+// 状态监控（每2分钟输出一次）
 setInterval(() => {
     const stats = manager.getStats();
     const percentage = stats.total > 0 ? Math.round((stats.inLobby / stats.total) * 100) : 0;
@@ -1917,7 +2081,7 @@ setInterval(() => {
     
     // 打印代理使用统计
     manager.printProxyStats();
-}, 30000);
+}, 120000);
 
 // 异常处理
 process.on('uncaughtException', (err) => {
@@ -1956,6 +2120,16 @@ process.stdin.on('data', (data) => {
                 logInfo('System', `   ${idx + 1}. LobbyId: ${id}`);
             });
             manager.dissolveRooms(cmd.roomIds);
+            return;
+        }
+
+        // 自动结算命令（由挂机车队选择“可解散且无陌生人”的房间）
+        if (cmd.type === 'settle_rooms') {
+            const count = Number(cmd.count || 1);
+            const excludeRoomIds = Array.isArray(cmd.excludeRoomIds) ? cmd.excludeRoomIds : [];
+            logSection('收到自动结算命令');
+            logInfo('System', `请求结算: count=${count} exclude=${excludeRoomIds.length}`);
+            manager.settleRooms(count, excludeRoomIds);
             return;
         }
         

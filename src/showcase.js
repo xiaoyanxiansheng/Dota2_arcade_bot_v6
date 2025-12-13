@@ -878,15 +878,13 @@ class ShowcaseManager {
 
                 // 结算：仅当展示位接近上限（>=阈值）才需要解散 1 个最老挂机房腾位
                 if (lobbyCount >= minLobbyCountForRotation) {
-                    const showcaseLobbyIds = [this.bots[0].currentLobbyId?.toString(), this.bots[1].currentLobbyId?.toString()].filter(Boolean);
-                    const oldestRooms = this.findOldestRoomsExcluding(lobbies, 1, showcaseLobbyIds);
-                    if (oldestRooms.length > 0) {
-                        logInfo('Showcase', `结算：房间数达到阈值(${lobbyCount}>=${minLobbyCountForRotation})，通知挂机车队解散 1 个最老房间...`);
-                        logInfo('Showcase', `   1. ${oldestRooms[0].lobbyId} (创建时间: ${new Date(oldestRooms[0].createdAt * 1000).toLocaleTimeString()})`);
-                        await this.notifyFarmingFleet([oldestRooms[0].lobbyId.toString()]);
-                    } else {
-                        logInfo('Showcase', `结算：房间数达到阈值，但未找到可解散的挂机房间（跳过）`);
-                    }
+                    const showcaseLobbyIds = [
+                        this.bots[0].currentLobbyId?.toString(),
+                        this.bots[1].currentLobbyId?.toString()
+                    ].filter(Boolean);
+
+                    logInfo('Showcase', `结算：房间数达到阈值(${lobbyCount}>=${minLobbyCountForRotation})，请求挂机车队“自动结算”1个可解散房间...`);
+                    await this.requestFarmingAutoSettle(1, showcaseLobbyIds);
                 } else {
                     logInfo('Showcase', `结算：房间数未达阈值(${lobbyCount}<${minLobbyCountForRotation})，无需解散（跳过）`);
                 }
@@ -978,6 +976,44 @@ class ShowcaseManager {
                 resolve();
             });
             
+            req.write(postData);
+            req.end();
+        });
+    }
+
+    // 请求挂机车队“自动结算”：由挂机车队选择可解散且无陌生人的房间
+    async requestFarmingAutoSettle(count, excludeRoomIds) {
+        return new Promise((resolve) => {
+            const postData = JSON.stringify({ count, excludeRoomIds });
+
+            const options = {
+                hostname: '127.0.0.1',
+                port: 3000,
+                path: '/api/settle_rooms',
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': Buffer.byteLength(postData)
+                }
+            };
+
+            const req = http.request(options, (res) => {
+                res.on('data', () => {});
+                res.on('end', () => {
+                    if (res.statusCode === 200) {
+                        logSuccess('Showcase', `   已请求挂机车队自动结算 ${count} 个房间`);
+                    } else {
+                        logWarning('Showcase', `   请求挂机车队自动结算失败: ${res.statusCode}`);
+                    }
+                    resolve();
+                });
+            });
+
+            req.on('error', (err) => {
+                logWarning('Showcase', `   无法连接到 Web 服务器: ${err.message}`);
+                resolve();
+            });
+
             req.write(postData);
             req.end();
         });
