@@ -1,23 +1,15 @@
 @echo off
 chcp 65001 >nul
-echo ═══════════════════════════════════════════════════════════════
-echo   Dota2 挂机车队启动
-echo ═══════════════════════════════════════════════════════════════
+title 挂机车队
+
+:: 列出可用配置
+echo [可用配置]
+for /d %%i in (config\farm\config_*) do echo   %%~ni
 echo.
 
-cd /d "%~dp0"
+:: 输入配置编号
+set /p num="输入编号 (000/001/002...): "
 
-REM 可以通过参数指定配置文件
-if "%1"=="" (
-    set CONFIG=config/config_farming.json
-) else (
-    set CONFIG=%1
-)
-
-echo 配置文件: %CONFIG%
-echo.
-
-node src/farming.js --config=%CONFIG%
-
+:: 启动
+node src/farming.js --config=config_%num%
 pause
-

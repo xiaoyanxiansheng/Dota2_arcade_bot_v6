@@ -16,8 +16,24 @@
     │  farming.js     │             │                 │
     └─────────────────┘             └─────────────────┘
            ↑                              ↑
-        accounts_1.txt                 accounts_2.txt
-        (5000个号)                     (5000个号)
+      config_000~004                  config_005~009
+        (小号组1)                       (小号组2)
+
+
+═══════════════════════════════════════════════════════════════════
+【当前配置结构】
+═══════════════════════════════════════════════════════════════════
+
+config/
+├── config_leaders.json          ← 主号配置 + 全局设置 + 代理
+└── farm/
+    ├── config_000/
+    │   └── followers.txt        ← 小号账号文件
+    ├── config_001/
+    │   └── followers.txt
+    ├── ...
+    └── config_009/
+        └── followers.txt
 
 
 ═══════════════════════════════════════════════════════════════════
@@ -27,63 +43,85 @@
 一、电脑 A (主控电脑)
 ───────────────────────────────────────────────────────────────────
 1. 正常使用，无需修改
-2. 启动方式：
-   - start_web.bat      (启动Web控制台)
+2. 保留部分 config_XXX 文件夹，如 config_000 ~ config_004
+3. 启动方式：
+   - start_web.bat (启动Web控制台)
    - 在Web界面启动展示车队和挂机车队
 
 二、电脑 B/C/D... (独立挂机电脑)
 ───────────────────────────────────────────────────────────────────
 1. 复制整个项目文件夹到新电脑
 
-2. 修改配置文件：
+2. 修改 config/config_leaders.json：
+   - 使用不同的领队账号（"leaders" 数组）
+   - global_settings 保持一致（特别是 custom_game_id）
+
+3. 整理 config/farm/ 文件夹：
+   - 删除电脑A已经使用的 config_XXX 文件夹
+   - 只保留该电脑要使用的文件夹
    
-   config/config_leaders.json
-   ├── 修改 leaders 数组，使用不同的领队账号
-   └── global_settings 可以保持一致
-
-   config/config_followers.json  
-   └── 修改 accounts_file，指向不同的账号文件
-       例如: "accounts_file": "data/accounts_pc2.txt"
-
-3. 准备账号文件：
-   data/accounts_pc2.txt (或其他名称)
-   └── 放入该电脑要使用的小号
+   例如：
+   电脑A保留: config_000 ~ config_004
+   电脑B保留: config_005 ~ config_009
+   
+   或者重新编号：
+   电脑B的 config/farm/ 下只放 config_000 ~ config_004
+   （内容是原来的 config_005~009）
 
 4. 启动方式：
    双击 start_farming_standalone.bat
+   → 输入配置编号，如 000、001、005 等
+   → 直接回车默认加载 config_000
 
 
 ═══════════════════════════════════════════════════════════════════
 【配置示例】
 ═══════════════════════════════════════════════════════════════════
 
-电脑B的 config/config_leaders.json:
+电脑A的 config/config_leaders.json:
 {
     "global_settings": {
-        "custom_game_id": "3586896069",    // 与主控相同
-        "lobby_password": "wuxian",         // 与主控相同
+        "custom_game_id": "3586896069",
+        "lobby_password": "wuxian",
         ...
     },
     "leaders": [
-        {
-            "username": "leader_pc2_1",     // 不同的领队账号
-            "password": "xxx",
-            ...
-        },
-        {
-            "username": "leader_pc2_2",
-            "password": "xxx",
-            ...
-        }
-    ]
+        { "username": "leader_a1", "password": "xxx" },
+        { "username": "leader_a2", "password": "xxx" }
+    ],
+    "proxies": [ ... ]
 }
 
-电脑B的 config/config_followers.json:
+电脑A的 config/farm/ 目录:
+├── config_000/followers.txt   (1900个号)
+├── config_001/followers.txt   (1900个号)
+├── config_002/followers.txt   (1900个号)
+├── config_003/followers.txt   (1900个号)
+└── config_004/followers.txt   (1900个号)
+
+
+───────────────────────────────────────────────────────────────────
+
+电脑B的 config/config_leaders.json:
 {
-    "accounts_file": "data/accounts_pc2.txt",   // 不同的账号文件
-    "proxy_file": "data/proxies.txt",           // 代理可以共用或不同
-    ...
+    "global_settings": {
+        "custom_game_id": "3586896069",    ← 必须相同！
+        "lobby_password": "wuxian",         ← 必须相同！
+        ...
+    },
+    "leaders": [
+        { "username": "leader_b1", "password": "xxx" },  ← 不同的主号
+        { "username": "leader_b2", "password": "xxx" }
+    ],
+    "proxies": [ ... ]  ← 可以相同或不同
 }
+
+电脑B的 config/farm/ 目录:
+├── config_000/followers.txt   (原config_005的内容)
+├── config_001/followers.txt   (原config_006的内容)
+├── config_002/followers.txt   (原config_007的内容)
+├── config_003/followers.txt   (原config_008的内容)
+└── config_004/followers.txt   (原config_009的内容)
 
 
 ═══════════════════════════════════════════════════════════════════
@@ -91,17 +129,17 @@
 ═══════════════════════════════════════════════════════════════════
 
 1. 账号不能重复
-   - 每台电脑使用不同的领队账号
-   - 每台电脑使用不同的小号文件
-   - 同一个Steam账号不能同时在多台电脑登录
+   ✗ 同一个Steam账号不能同时在多台电脑登录
+   ✗ 领队账号每台电脑必须不同
+   ✗ followers.txt 中的小号每台电脑必须不同
 
 2. 游戏ID必须相同
-   - 所有电脑的 custom_game_id 必须一致
-   - 否则房间会出现在不同游戏的列表中
+   ✓ 所有电脑的 custom_game_id 必须一致
+   ✓ lobby_password 也建议一致
 
 3. 展示车队只需要一台
-   - 只在主控电脑运行展示车队
-   - 其他电脑只运行挂机车队
+   ✓ 只在主控电脑运行展示车队
+   ✓ 其他电脑只运行挂机车队
 
 4. "结算"功能的限制
    - 展示车队的结算请求只会发送到本地(127.0.0.1:3000)
@@ -109,8 +147,31 @@
    - 这通常不是问题，因为75个展示位会自然被新房间填满
 
 5. 代理建议
-   - 如果代理数量有限，建议每台电脑使用不同的代理池
+   - 如果代理数量有限，建议每台电脑使用不同的代理
    - 避免同一个代理IP同时登录过多账号
+
+
+═══════════════════════════════════════════════════════════════════
+【快速分割小号的方法】
+═══════════════════════════════════════════════════════════════════
+
+假设你有 10 个配置文件夹，想分给 2 台电脑：
+
+方法1：直接分割
+─────────────────────────────────
+电脑A: 删除 config_005 ~ config_009
+电脑B: 删除 config_000 ~ config_004
+
+方法2：复制后重命名（推荐）
+─────────────────────────────────
+电脑B上：
+1. 删除 config/farm/ 下的所有文件夹
+2. 从电脑A复制 config_005~009 到电脑B
+3. 将 config_005 改名为 config_000
+4. 将 config_006 改名为 config_001
+5. 以此类推...
+
+这样两台电脑都是从 config_000 开始，便于管理。
 
 
 ═══════════════════════════════════════════════════════════════════
@@ -123,10 +184,13 @@ A: 是的，只要 custom_game_id 相同，所有房间都会出现在同一个�
 
 Q: 没有Web界面怎么查看状态？
 A: 独立模式下，状态会直接打印在命令行窗口中。
-   也可以在独立电脑上单独启动 start_web.bat 查看该电脑的状态。
+   如需Web界面，可以单独运行 start_web.bat。
 
-Q: 可以在独立电脑上也启动Web服务器吗？
-A: 可以，但需要使用不同的端口，或者确保不冲突。
-   一般不需要，命令行输出已经足够。
+Q: 我有20000个小号，怎么分配？
+A: 建议每台电脑 8000-10000 个小号。
+   小号太多会导致登录队列过长，建议分多台电脑。
 
+Q: 需要多少个领队账号？
+A: 每台电脑至少 1-2 个领队账号。
+   领队数量决定同时能创建多少房间。
 

@@ -1681,8 +1681,14 @@ class FarmingManager {
         // 启动主号
         this.leaders.forEach(leader => leader.start());
         
-        // 自动加载 config_000
-        this.addConfig('config_000');
+        // 解析 --config=config_XXX 参数，默认 config_000
+        let configToLoad = 'config_000';
+        const configArg = process.argv.find(arg => arg.startsWith('--config='));
+        if (configArg) {
+            configToLoad = configArg.replace('--config=', '');
+        }
+        
+        this.addConfig(configToLoad);
         
         // 启动登录流水线
         this.startLoginPipeline();

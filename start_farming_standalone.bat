@@ -4,7 +4,6 @@ title 挂机车队 (独立模式)
 
 echo ═══════════════════════════════════════════════════════
 echo    挂机车队 - 独立模式 (无Web服务器)
-echo    用于分布式部署在其他电脑上
 echo ═══════════════════════════════════════════════════════
 echo.
 
@@ -23,15 +22,38 @@ if not exist "config\config_leaders.json" (
     exit /b 1
 )
 
-echo [提示] 独立模式：只运行挂机车队，不启动Web服务器
-echo [提示] 展示车队的"结算"功能将不会影响此实例
+:: 列出可用配置
+echo [可用配置]
+for /d %%i in (config\farm\config_*) do (
+    echo   %%~ni
+)
 echo.
-echo 按任意键启动挂机车队...
-pause >nul
 
-node src/farming.js
+:: 输入配置编号
+set /p configNum="请输入配置编号 (如 000、001，默认000): "
+
+:: 默认值
+if "%configNum%"=="" set configNum=000
+
+:: 补齐3位
+set configNum=00%configNum%
+set configNum=%configNum:~-3%
+
+:: 检查配置是否存在
+set configName=config_%configNum%
+if not exist "config\farm\%configName%\followers.txt" (
+    echo [错误] 配置不存在: %configName%
+    pause
+    exit /b 1
+)
+
+echo.
+echo 启动配置: %configName%
+echo.
+
+:: 启动，传递配置名称
+node src/farming.js --config=%configName%
 
 echo.
 echo 挂机车队已停止
 pause
-
