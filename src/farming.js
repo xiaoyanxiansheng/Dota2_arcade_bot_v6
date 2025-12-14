@@ -1086,7 +1086,9 @@ class LeaderBot {
     }
 
     log(msg) {
-        console.log(`[${formatTime()}] [挂机主号|${this.account.username}] ${msg}`);
+        // 统一写入文件日志，避免“主号不建房/断线”在 farming_*.log 中不可观测
+        const name = this.account?.username || 'unknown';
+        logInfo('主号', `👑[${name}] ${msg}`);
     }
 
     // 🔴 获取主号专用代理（轮换选择）
@@ -1223,7 +1225,10 @@ class LeaderBot {
         this.log(`🔄 因 ${reason} 断开，5秒后重连...`);
         this.is_gc_connected = false;
         this.state = 'DISCONNECTED'; // 🔴 重置状态，防止旧超时检测干扰
-        this.cleanup();
+
+        // 🔴 修复：handleDisconnect 走的是“重连”，不应把 stopped=true
+        // 使用 reconnect 专用清理，避免断线后永不重连
+        this.cleanupForReconnect();
         
         setTimeout(() => {
             this.isReconnecting = false; // 🔴 重置标志
@@ -1504,7 +1509,7 @@ class LeaderBot {
                 this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
             }
         } catch (err) {}
-        
+
         // 记录离开的房间ID，用于忽略后续的旧房间更新
         this.lastLeftLobbyId = this.currentLobbyId;
         this.currentLobbyId = null;
@@ -1528,6 +1533,36 @@ class LeaderBot {
             const buffer = CMsgReadyUp.encode(message).finish();
             this.client.sendToGC(this.settings.target_app_id, k_EMsgGCReadyUp | k_EMsgProtoMask, {}, buffer);
         } catch (err) {}
+    }
+
+    // 🔴 重连专用清理：不设置 stopped=true，避免“断线后永不重连”
+    cleanupForReconnect() {
+        if (this.ready_up_heartbeat) {
+            clearInterval(this.ready_up_heartbeat);
+            this.ready_up_heartbeat = null;
+        }
+        this.is_gc_connected = false;
+
+        // 清理房间状态，避免 stats 误报“主号仍活跃”
+        this.currentLobbyId = null;
+        this.currentRoomMemberCount = 0;
+        this.state = 'DISCONNECTED';
+
+        const clientToClean = this.client;
+        try {
+            if (clientToClean) {
+                clientToClean.sendToGC(this.settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                clientToClean.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
+                setTimeout(() => {
+                    try { clientToClean.logOff(); } catch (e) {}
+                    setTimeout(() => {
+                        try { clientToClean.removeAllListeners(); } catch (e) {}
+                    }, 500);
+                }, 300);
+            }
+        } catch (err) {}
+
+        this.client = null;
     }
 
     cleanup() {
