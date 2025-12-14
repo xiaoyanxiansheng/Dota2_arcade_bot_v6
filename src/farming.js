@@ -37,42 +37,9 @@ if (LOG_CONFIG.enabled && !fs.existsSync(LOG_CONFIG.logDir)) {
     fs.mkdirSync(LOG_CONFIG.logDir, { recursive: true });
 }
 
-// 生成本地时间戳（避免 toISOString() 的 UTC 时间导致“慢 8 小时”）
-function pad2(n) {
-    return String(n).padStart(2, '0');
-}
-
-function pad3(n) {
-    return String(n).padStart(3, '0');
-}
-
-function formatLocalDate(date = new Date()) {
-    const y = date.getFullYear();
-    const m = pad2(date.getMonth() + 1);
-    const d = pad2(date.getDate());
-    return `${y}-${m}-${d}`;
-}
-
-function formatLocalTimestamp(date = new Date()) {
-    const ymd = formatLocalDate(date);
-    const hh = pad2(date.getHours());
-    const mm = pad2(date.getMinutes());
-    const ss = pad2(date.getSeconds());
-    const ms = pad3(date.getMilliseconds());
-
-    // getTimezoneOffset(): minutes behind UTC (e.g. China = -480)
-    const offsetMin = -date.getTimezoneOffset();
-    const sign = offsetMin >= 0 ? '+' : '-';
-    const abs = Math.abs(offsetMin);
-    const oh = pad2(Math.floor(abs / 60));
-    const om = pad2(abs % 60);
-
-    return `${ymd}T${hh}:${mm}:${ss}.${ms}${sign}${oh}:${om}`;
-}
-
 // 获取当天日志文件路径
 function getLogFilePath() {
-    const today = formatLocalDate(); // YYYY-MM-DD（本地时区）
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     return path.join(LOG_CONFIG.logDir, `farming_${today}.log`);
 }
 
@@ -81,7 +48,7 @@ function writeToLogFile(level, category, message) {
     if (!LOG_CONFIG.enabled) return;
     
     try {
-        const timestamp = formatLocalTimestamp();
+        const timestamp = new Date().toISOString();
         const logLine = `[${timestamp}] [${level}] [${category}] ${message}\n`;
         fs.appendFileSync(getLogFilePath(), logLine);
     } catch (err) {
@@ -300,6 +267,24 @@ class FollowerPool {
         this.all = [];           // 所有小号引用
     }
 
+    // 有小号回池/入池时，尽量唤醒更多等待的主号（避免“池子来了一堆人但只唤醒1个主号”）
+    _notifyWaitingLeaders() {
+        if (this.waitingLeaders.length === 0) return;
+        if (this.idle.length === 0) return;
+        // ⚠️ 注意：callback 在 setImmediate 才会执行，此处 idle.length 不会立刻减少。
+        // 因此需要用“唤醒次数预算”来避免一次性把 waitingLeaders 全部 shift 掉。
+        let wakes = Math.min(this.waitingLeaders.length, this.idle.length);
+        while (wakes > 0 && this.waitingLeaders.length > 0) {
+            const callback = this.waitingLeaders.shift();
+            if (callback) {
+                setImmediate(() => {
+                    try { callback(); } catch (e) {}
+                });
+            }
+            wakes--;
+        }
+    }
+
     // 添加小号到池子（状态2：创建未分配）
     addToIdle(follower) {
         // 🔴 新增：配置移除中/已移除的小号，禁止回池（不影响旧逻辑）
@@ -317,13 +302,8 @@ class FollowerPool {
                 logInfo('Pool', `📥 池子小号: ${this.idle.length} 个`);
             }
             
-            // 🔴 新增：如果有主号在等待小号，通知它们
-            if (this.waitingLeaders.length > 0) {
-                const callback = this.waitingLeaders.shift();
-                if (callback) {
-                    setImmediate(() => callback());
-                }
-            }
+            // 如果有主号在等待小号，尽量唤醒它们
+            this._notifyWaitingLeaders();
         }
     }
 
@@ -335,7 +315,11 @@ class FollowerPool {
             return [];
         }
 
-        this.assigned.set(lobbyId.toString(), toAssign);
+        // ⚠️ 关键：对同一 lobbyId 支持“追加分配”，用于池子回补后补齐缺口
+        const lobbyKey = lobbyId.toString();
+        const existing = this.assigned.get(lobbyKey) || [];
+        existing.push(...toAssign);
+        this.assigned.set(lobbyKey, existing);
         
         toAssign.forEach(f => {
             f.state = FollowerState.ASSIGNED;
@@ -375,15 +359,6 @@ class FollowerPool {
         this.addToIdle(follower);
         
         logSuccess('Pool', `✅ ${follower.account.username} 已回到池子 (原房间: ${prevLobby || '无'})`);
-        
-        // 🔴 新增：如果有主号在等待小号，通知它们
-        if (this.waitingLeaders.length > 0 && this.idle.length > 0) {
-            const callback = this.waitingLeaders.shift();
-            if (callback) {
-                // 延迟执行，避免在同一事件循环中处理
-                setImmediate(() => callback());
-            }
-        }
     }
 
     // 获取统计信息
@@ -1103,6 +1078,12 @@ class LeaderBot {
         this.leaveScheduled = false; // 是否已安排离开
         this.stopped = false;
 
+        // 固定人数补齐（稳定策略）：
+        // - 每个房间预分配固定数量小号：max_players_per_room - 2
+        // - 若池子不足导致未分满，则登记等待；当小号回池后自动补齐缺口到固定人数
+        this._fillWaitLobbyId = null;
+        this._fillWaitPending = false;
+
         // 🔴 IP 轮换相关
         this.proxyIndex = 0;
         // 🔴 根据主号数量动态计算每个主号的房间阈值
@@ -1369,14 +1350,20 @@ class LeaderBot {
                     this.state = 'SEEDING';
                     logSuccess('主号', `房间 #${this.roomsCreated} 创建成功: ${lobbyId.toString()}`);
                     
-                    // 从池子分配小号给这个房间
-                    this.assignFollowersToRoom(lobbyId);
+                    // 固定人数分配：不足则登记等待，池子回补后补齐缺口
+                    this.fillFollowersToFixedTarget(lobbyId, 'room_created');
                 }
                 
                 // 只处理当前房间的更新
                 if (this.currentLobbyId && lobbyId.toString() === this.currentLobbyId.toString()) {
                     // 更新房间人数
                     this.currentRoomMemberCount = memberCount;
+
+                    // 固定人数补齐：如果还在 SEEDING 且未达阈值，持续尝试补齐缺口
+                    // （避免“分配后中途有人回池/加入失败”导致人数长期 < 阈值）
+                    if (this.state === 'SEEDING' && memberCount < this.seedingThreshold) {
+                        this.fillFollowersToFixedTarget(lobbyId, 'lobby_update');
+                    }
                     
                     // 人数达标立即离开创建新房间
                     if (this.state === 'SEEDING' && memberCount >= this.seedingThreshold) {
@@ -1474,37 +1461,92 @@ class LeaderBot {
         }
     }
 
-    assignFollowersToRoom(lobbyId) {
+    getMaxFollowersPerRoom() {
+        return (this.settings.max_players_per_room || 24) - 2;
+    }
+
+    _getAssignedCountForLobby(lobbyId) {
+        if (!lobbyId) return 0;
+        const list = this.pool.assigned.get(lobbyId.toString());
+        return Array.isArray(list) ? list.length : 0;
+    }
+
+    _registerFillWait(lobbyIdStr) {
+        if (!lobbyIdStr) return;
+        if (this._fillWaitPending && this._fillWaitLobbyId === lobbyIdStr) return;
+        this._fillWaitPending = true;
+        this._fillWaitLobbyId = lobbyIdStr;
+
+        this.pool.waitingLeaders.push(() => {
+            // 回池触发：尝试补齐缺口
+            this._fillWaitPending = false;
+            if (this.stopped) return;
+            if (this.state !== 'SEEDING') return;
+            if (!this.currentLobbyId) return;
+            if (this.currentLobbyId.toString() !== lobbyIdStr) return;
+            this.fillFollowersToFixedTarget(this.currentLobbyId, 'pool_replenished');
+        });
+    }
+
+    fillFollowersToFixedTarget(lobbyId, reason = '') {
+        if (this.stopped) return;
+        if (!lobbyId) return;
+        // 只对“当前房间”做补齐，避免旧房间/延迟消息误触发
+        if (!this.currentLobbyId) return;
+        if (this.currentLobbyId.toString() !== lobbyId.toString()) return;
+        if (this.state !== 'SEEDING') return;
+
+        const target = this.getMaxFollowersPerRoom();
+        const assignedNow = this._getAssignedCountForLobby(lobbyId);
+        const missing = Math.max(0, target - assignedNow);
+
+        if (missing <= 0) {
+            // 已补齐：清理等待标记
+            if (this._fillWaitLobbyId === lobbyId.toString()) {
+                this._fillWaitPending = false;
+                this._fillWaitLobbyId = null;
+            }
+            return;
+        }
+
+        if (reason) {
+            logInfo('主号', `🧩 补齐检查(${reason}): lobby=${lobbyId.toString()} 已分配=${assignedNow}/${target} 缺口=${missing} idle=${this.pool.idle.length}`);
+        }
+
+        const got = this.assignFollowersToRoom(lobbyId, missing);
+        const after = assignedNow + (got || 0);
+        const remain = Math.max(0, target - after);
+
+        if (remain > 0) {
+            // 池子不足：登记等待（池子回补时继续补缺口）
+            this._registerFillWait(lobbyId.toString());
+        } else {
+            // 已补齐：清理等待标记
+            this._fillWaitPending = false;
+            this._fillWaitLobbyId = null;
+            logInfo('主号', `✅ 已补齐固定人数: lobby=${lobbyId.toString()} 已分配=${after}/${target}`);
+        }
+    }
+
+    assignFollowersToRoom(lobbyId, count) {
         if (this.stopped) return; // 已停止，不再操作
         
         // 从池子取 (max_players - 2) 个小号
         // max_players_per_room - 1 = 房间实际最大人数（防止满员解散）
         // 再 -1 = 主号占1个位置
-        const maxFollowers = (this.settings.max_players_per_room || 24) - 2;
-        const followers = this.pool.assignToRoom(lobbyId, maxFollowers);
+        const maxFollowers = this.getMaxFollowersPerRoom();
+        const requestCount = Math.max(1, Math.min(maxFollowers, Number(count) || 1));
+        const followers = this.pool.assignToRoom(lobbyId, requestCount);
         
         if (followers.length === 0) {
-            this.log(`⏳ 池子为空，等待小号回池后自动分配...`);
-            
-            // 🔴 修复：注册回调，当小号回到池子时立即触发
-            this.pool.waitingLeaders.push(() => {
-                if (this.currentLobbyId && this.state === 'SEEDING' && !this.stopped) {
-                    this.assignFollowersToRoom(lobbyId);
-                }
-            });
-            
-            // 备用：60秒超时保底（防止回调丢失）
-            setTimeout(() => {
-                if (this.currentLobbyId && this.state === 'SEEDING' && !this.stopped && this.pool.idle.length > 0) {
-                    this.assignFollowersToRoom(lobbyId);
-                }
-            }, 60000);
-            return;
+            const lobbyIdStr = lobbyId?.toString?.() || String(lobbyId);
+            logInfo('主号', `⏳ 池子为空/不足，本次未分配（request=${requestCount} lobby=${lobbyIdStr} idle=${this.pool.idle.length}）`);
+            return 0;
         }
 
         // 打印分配信息（包括是否不足）
-        if (followers.length < maxFollowers) {
-            logInfo('主号', `🚀 分配 ${followers.length}/${maxFollowers} 个小号 → 房间 #${this.roomsCreated} (池子不足)`);
+        if (followers.length < requestCount) {
+            logInfo('主号', `🚀 分配 ${followers.length}/${requestCount} 个小号 → 房间 #${this.roomsCreated} (池子不足)`);
         } else {
             logInfo('主号', `🚀 分配 ${followers.length} 个小号 → 房间 #${this.roomsCreated}`);
         }
@@ -1522,6 +1564,8 @@ class LeaderBot {
                 }
             }, idx * 100);
         });
+        
+        return followers.length;
     }
 
     leaveAndCreateNew() {
@@ -1542,6 +1586,10 @@ class LeaderBot {
                 this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
             }
         } catch (err) {}
+
+        // 离开房间：清理补齐等待标记
+        this._fillWaitPending = false;
+        this._fillWaitLobbyId = null;
 
         // 记录离开的房间ID，用于忽略后续的旧房间更新
         this.lastLeftLobbyId = this.currentLobbyId;
@@ -1580,6 +1628,8 @@ class LeaderBot {
         this.currentLobbyId = null;
         this.currentRoomMemberCount = 0;
         this.state = 'DISCONNECTED';
+        this._fillWaitPending = false;
+        this._fillWaitLobbyId = null;
 
         const clientToClean = this.client;
         try {
@@ -1604,6 +1654,8 @@ class LeaderBot {
         // 标记为已停止，阻止后续操作
         this.stopped = true;
         this.is_gc_connected = false;
+        this._fillWaitPending = false;
+        this._fillWaitLobbyId = null;
         
         // 保存客户端引用，用于延迟清理
         const clientToClean = this.client;
