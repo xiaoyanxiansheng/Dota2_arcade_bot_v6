@@ -38,9 +38,41 @@ if (LOG_CONFIG.enabled && !fs.existsSync(LOG_CONFIG.logDir)) {
     fs.mkdirSync(LOG_CONFIG.logDir, { recursive: true });
 }
 
+// 生成本地时间戳（避免 toISOString() 的 UTC 时间导致“慢 8 小时”）
+function pad2(n) {
+    return String(n).padStart(2, '0');
+}
+
+function pad3(n) {
+    return String(n).padStart(3, '0');
+}
+
+function formatLocalDate(date = new Date()) {
+    const y = date.getFullYear();
+    const m = pad2(date.getMonth() + 1);
+    const d = pad2(date.getDate());
+    return `${y}-${m}-${d}`;
+}
+
+function formatLocalTimestamp(date = new Date()) {
+    const ymd = formatLocalDate(date);
+    const hh = pad2(date.getHours());
+    const mm = pad2(date.getMinutes());
+    const ss = pad2(date.getSeconds());
+    const ms = pad3(date.getMilliseconds());
+
+    const offsetMin = -date.getTimezoneOffset();
+    const sign = offsetMin >= 0 ? '+' : '-';
+    const abs = Math.abs(offsetMin);
+    const oh = pad2(Math.floor(abs / 60));
+    const om = pad2(abs % 60);
+
+    return `${ymd}T${hh}:${mm}:${ss}.${ms}${sign}${oh}:${om}`;
+}
+
 // 获取当天日志文件路径
 function getLogFilePath() {
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const today = formatLocalDate(); // YYYY-MM-DD（本地时区）
     return path.join(LOG_CONFIG.logDir, `showcase_${today}.log`);
 }
 
@@ -49,7 +81,7 @@ function writeToLogFile(level, category, message) {
     if (!LOG_CONFIG.enabled) return;
     
     try {
-        const timestamp = new Date().toISOString();
+        const timestamp = formatLocalTimestamp();
         const logLine = `[${timestamp}] [${level}] [${category}] ${message}\n`;
         fs.appendFileSync(getLogFilePath(), logLine);
     } catch (err) {
