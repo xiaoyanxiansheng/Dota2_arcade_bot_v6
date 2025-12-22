@@ -118,6 +118,9 @@ function broadcastToFarmingPeers(payload) {
 // farming 主号状态：等待队列（用于 /api/farming/leaders_status）
 let _farmingLeadersStatusWaiters = [];
 let _lastFarmingLeadersStatus = null;
+// farming stats：等待队列（用于 /api/farming/stats）
+let _farmingStatsWaiters = [];
+let _lastFarmingStats = null;
 
 // 进程管理
 const processes = {
@@ -190,6 +193,17 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT, logSource = null) 
                                 // 推送给前端（可用于实时 UI）
                                 io.emit('farmingLeadersStatus', { data: obj.data });
                                 return; // 不输出到日志
+                            }
+                            if (obj.type === 'stats' && obj.data && typeof obj.data === 'object') {
+                                _lastFarmingStats = obj.data;
+                                // 唤醒所有等待者
+                                const waiters = _farmingStatsWaiters;
+                                _farmingStatsWaiters = [];
+                                waiters.forEach(w => {
+                                    try { w.resolve(obj.data); } catch (e) {}
+                                });
+                                // 不输出到日志（避免污染界面）
+                                return;
                             }
                             if (obj.type === 'stop_leader_result' || obj.type === 'start_leader_result') {
                                 io.emit('farmingLeaderActionResult', obj);
@@ -546,6 +560,66 @@ app.get('/api/farming/leaders_status', async (req, res) => {
             return res.json({ success: true, data: _lastFarmingLeadersStatus, stale: true });
         }
         res.status(504).json({ error: '获取主号状态超时' });
+    }
+});
+
+// 获取挂机 stats（会向 farming 进程请求一次，等待 JSON 回传）
+app.get('/api/farming/stats', async (req, res) => {
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+
+    const timeoutMs = Number(req.query?.timeoutMs || 5000);
+    const timeout = Number.isFinite(timeoutMs) ? Math.max(1000, Math.min(timeoutMs, 20000)) : 5000;
+
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const waiter = {};
+            const timer = setTimeout(() => {
+                _farmingStatsWaiters = _farmingStatsWaiters.filter(w => w !== waiter);
+                reject(new Error('timeout'));
+            }, timeout);
+            waiter.resolve = (d) => { clearTimeout(timer); resolve(d); };
+            waiter.reject = (e) => { clearTimeout(timer); reject(e); };
+            _farmingStatsWaiters.push(waiter);
+            processes.farming.process.stdin.write(JSON.stringify({ type: 'get_stats' }) + '\n');
+        });
+        res.json({ success: true, data });
+    } catch (e) {
+        // 超时则回退到缓存
+        if (_lastFarmingStats) {
+            return res.json({ success: true, data: _lastFarmingStats, stale: true });
+        }
+        res.status(504).json({ error: '获取 stats 超时' });
+    }
+});
+
+// Farm UI 专用：获取“已加入池子”的配置列表（权威来自 farming stats.loadedConfigs）
+app.get('/api/farm/loaded_configs', async (req, res) => {
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const waiter = {};
+            const timer = setTimeout(() => {
+                _farmingStatsWaiters = _farmingStatsWaiters.filter(w => w !== waiter);
+                reject(new Error('timeout'));
+            }, 5000);
+            waiter.resolve = (d) => { clearTimeout(timer); resolve(d); };
+            waiter.reject = (e) => { clearTimeout(timer); reject(e); };
+            _farmingStatsWaiters.push(waiter);
+            processes.farming.process.stdin.write(JSON.stringify({ type: 'get_stats' }) + '\n');
+        });
+        const loaded = Array.isArray(data?.loadedConfigs) ? data.loadedConfigs : [];
+        res.json({ success: true, loadedConfigs: loaded });
+    } catch (e) {
+        // 回退缓存
+        const loaded = Array.isArray(_lastFarmingStats?.loadedConfigs) ? _lastFarmingStats.loadedConfigs : null;
+        if (loaded) {
+            return res.json({ success: true, loadedConfigs: loaded, stale: true });
+        }
+        res.status(504).json({ error: '获取 loaded_configs 超时' });
     }
 });
 

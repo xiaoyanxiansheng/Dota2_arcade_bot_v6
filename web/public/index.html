@@ -470,7 +470,28 @@
                 // Farm 配置列表
                 const farmConfigs = ref([]);
                 const editingFarmConfig = ref(null);
-                const loadedFarmConfigs = ref(new Set(['config_000'])); // 已加入池子的配置（默认 config_000）
+                // 已加入池子的配置（仅用于前端显示：刷新页面也保留）
+                // 存储在浏览器 localStorage，不影响后端实际逻辑
+                const LOADED_FARM_CONFIGS_KEY = 'dota2_bot_loaded_farm_configs_v1';
+                const loadLoadedFarmConfigs = () => {
+                    try {
+                        const raw = localStorage.getItem(LOADED_FARM_CONFIGS_KEY);
+                        if (raw) {
+                            const arr = JSON.parse(raw);
+                            if (Array.isArray(arr)) {
+                                return new Set(arr.map(x => String(x)));
+                            }
+                        }
+                    } catch (e) {}
+                    // 默认 config_000 为“已加入”
+                    return new Set(['config_000']);
+                };
+                const loadedFarmConfigs = ref(loadLoadedFarmConfigs());
+                const persistLoadedFarmConfigs = () => {
+                    try {
+                        localStorage.setItem(LOADED_FARM_CONFIGS_KEY, JSON.stringify(Array.from(loadedFarmConfigs.value)));
+                    } catch (e) {}
+                };
                 const cleanupConfigName = ref('');
 
                 // 工具参数
@@ -1044,6 +1065,21 @@
                         const res = await fetch('/api/farm/configs');
                         const data = await res.json();
                         farmConfigs.value = data.configs || [];
+
+                        // 同步“已加入池子”的真实状态（换浏览器/换电脑也一致）
+                        try {
+                            const res2 = await fetch('/api/farm/loaded_configs');
+                            if (res2.ok) {
+                                const json2 = await res2.json();
+                                const arr = json2?.loadedConfigs;
+                                if (Array.isArray(arr)) {
+                                    loadedFarmConfigs.value = new Set(arr.map(x => String(x)));
+                                    persistLoadedFarmConfigs();
+                                }
+                            }
+                        } catch (e2) {
+                            // 忽略，保留本地缓存显示
+                        }
                     } catch (e) {
                         console.error('加载 Farm 配置失败', e);
                     }
@@ -1141,9 +1177,26 @@
                             body: JSON.stringify({ configName })
                         });
                         if (res.ok) {
-                            loadedFarmConfigs.value.add(configName);
-                            // 触发响应式更新
-                            loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                            // 加入成功后从后端拉一次真实状态，保证多端一致
+                            try {
+                                const res2 = await fetch('/api/farm/loaded_configs');
+                                if (res2.ok) {
+                                    const json2 = await res2.json();
+                                    const arr = json2?.loadedConfigs;
+                                    if (Array.isArray(arr)) {
+                                        loadedFarmConfigs.value = new Set(arr.map(x => String(x)));
+                                        persistLoadedFarmConfigs();
+                                    }
+                                } else {
+                                    loadedFarmConfigs.value.add(configName);
+                                    loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                                    persistLoadedFarmConfigs();
+                                }
+                            } catch (e2) {
+                                loadedFarmConfigs.value.add(configName);
+                                loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                                persistLoadedFarmConfigs();
+                            }
                         } else {
                             const err = await res.json();
                             alert('操作失败: ' + err.error);
@@ -1163,8 +1216,26 @@
                             body: JSON.stringify({ configName })
                         });
                         if (res.ok) {
-                            loadedFarmConfigs.value.delete(configName);
-                            loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                            // 移除成功后从后端拉一次真实状态，保证多端一致
+                            try {
+                                const res2 = await fetch('/api/farm/loaded_configs');
+                                if (res2.ok) {
+                                    const json2 = await res2.json();
+                                    const arr = json2?.loadedConfigs;
+                                    if (Array.isArray(arr)) {
+                                        loadedFarmConfigs.value = new Set(arr.map(x => String(x)));
+                                        persistLoadedFarmConfigs();
+                                    }
+                                } else {
+                                    loadedFarmConfigs.value.delete(configName);
+                                    loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                                    persistLoadedFarmConfigs();
+                                }
+                            } catch (e2) {
+                                loadedFarmConfigs.value.delete(configName);
+                                loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                                persistLoadedFarmConfigs();
+                            }
                         } else {
                             const err = await res.json();
                             alert('操作失败: ' + err.error);
