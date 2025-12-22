@@ -318,16 +318,65 @@ class FollowerPool {
         // ⚠️ 关键：对同一 lobbyId 支持“追加分配”，用于池子回补后补齐缺口
         const lobbyKey = lobbyId.toString();
         const existing = this.assigned.get(lobbyKey) || [];
-        existing.push(...toAssign);
+        const existingSet = new Set(existing);
+
+        // 防御性：避免同一小号被重复记录到 assigned（否则统计会“越加越大”）
+        const uniqueToAssign = [];
+        toAssign.forEach((f) => {
+            if (existingSet.has(f)) {
+                // 这种情况理论上不应发生：已分配的小号不该出现在 idle 队列里
+                // 为了不丢号：放回 idle，并清理分配信息
+                f.state = FollowerState.IDLE;
+                f.assignedLobbyId = null;
+                this.idle.push(f);
+                return;
+            }
+            uniqueToAssign.push(f);
+        });
+
+        if (uniqueToAssign.length === 0) {
+            return [];
+        }
+
+        existing.push(...uniqueToAssign);
         this.assigned.set(lobbyKey, existing);
         
-        toAssign.forEach(f => {
+        uniqueToAssign.forEach(f => {
             f.state = FollowerState.ASSIGNED;
             f.assignedLobbyId = lobbyId;
         });
 
-        logSuccess('Pool', `📤 分配 ${toAssign.length} 个小号 → 房间 ${lobbyId} (池子剩余: ${this.idle.length})`);
-        return toAssign;
+        logSuccess('Pool', `📤 分配 ${uniqueToAssign.length} 个小号 → 房间 ${lobbyId} (池子剩余: ${this.idle.length})`);
+        return uniqueToAssign;
+    }
+
+    // 从 assigned 映射中摘除某个小号（不回池、不改变 idle），用于异常/重登出时避免“assigned 残留”
+    detachFromAssigned(follower) {
+        if (!follower) return;
+
+        const removeFromList = (lobbyKey) => {
+            const arr = this.assigned.get(lobbyKey);
+            if (!arr || arr.length === 0) return;
+            let idx = arr.indexOf(follower);
+            while (idx >= 0) {
+                arr.splice(idx, 1);
+                idx = arr.indexOf(follower);
+            }
+            if (arr.length === 0) this.assigned.delete(lobbyKey);
+        };
+
+        // 优先按 follower.assignedLobbyId 快速定位
+        if (follower.assignedLobbyId) {
+            removeFromList(follower.assignedLobbyId.toString());
+        } else {
+            // 兜底：全表扫描（理论上不应发生，但防止“幽灵引用”）
+            for (const [k] of this.assigned) {
+                removeFromList(k);
+            }
+        }
+
+        // 清理分配信息
+        follower.assignedLobbyId = null;
     }
 
     // 小号退出房间，回到池子（状态3/4 → 状态2）
@@ -340,8 +389,12 @@ class FollowerPool {
             const lobbyId = follower.assignedLobbyId.toString();
             const assigned = this.assigned.get(lobbyId);
             if (assigned) {
-                const idx = assigned.indexOf(follower);
-                if (idx >= 0) assigned.splice(idx, 1);
+                // 防御性：如果同一个小号被重复记录，全部移除
+                let idx = assigned.indexOf(follower);
+                while (idx >= 0) {
+                    assigned.splice(idx, 1);
+                    idx = assigned.indexOf(follower);
+                }
                 if (assigned.length === 0) this.assigned.delete(lobbyId);
             }
             follower.assignedLobbyId = null;
@@ -369,8 +422,11 @@ class FollowerPool {
         let pendingCount = 0;
         
         // 统计已分配/已进入的
+        const seen = new Set();
         this.assigned.forEach(followers => {
             followers.forEach(f => {
+                if (!f || seen.has(f)) return;
+                seen.add(f);
                 if (f.state === FollowerState.IN_LOBBY) inLobbyCount++;
                 else assignedCount++;
             });
@@ -567,6 +623,9 @@ class FollowerBot {
             }
             this.is_gc_connected = false;
             this.state = FollowerState.PENDING;
+
+            // 🔴 关键：异常重登出时从 assigned 映射摘除，避免“⏳加 卡住/统计越加越大”
+            try { this.pool?.detachFromAssigned?.(this); } catch (e) {}
             
             // 2. 等待 3 秒后重新开始登录（不走失败池，直接重试，直到成功）
             setTimeout(() => {
@@ -1016,6 +1075,9 @@ class FollowerBot {
         // 清除超时定时器
         this.clearLoginTimeout();
         this.clearJoinTimeout();
+
+        // 🔴 关键：清理前从 assigned 映射摘除，避免异常/停用导致“assigned 残留”
+        try { this.pool?.detachFromAssigned?.(this); } catch (e) {}
         
         // 标记为已停止，阻止后续操作
         this.stopped = true;

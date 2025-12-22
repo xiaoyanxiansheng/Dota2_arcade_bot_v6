@@ -1,11 +1,13 @@
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const { Server } = require("socket.io");
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const os = require('os');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,6 +20,100 @@ app.use(express.static(path.join(__dirname, 'public')));
 const PORT = 3000;
 const PROJECT_ROOT = path.join(__dirname, '..');
 const DATA_DIR = path.join(PROJECT_ROOT, 'data');
+
+// ============================================
+// 多机广播（最小改动：只转发解散/结算命令）
+// ============================================
+// 三台机器代码一致，通过配置文件区分：
+// config/cluster.json （该目录已在 .gitignore 中忽略）
+// 示例见 docs/cluster.example.json
+const CLUSTER_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'cluster.json');
+
+function loadClusterConfig() {
+    // 默认不开启广播（peers 为空）
+    const cfg = {
+        node_id: String(os.hostname()).trim() || 'node',
+        relay_token: '',
+        peers: []
+    };
+
+    try {
+        if (!fs.existsSync(CLUSTER_CONFIG_PATH)) return cfg;
+        const raw = fs.readFileSync(CLUSTER_CONFIG_PATH, 'utf8').replace(/^\uFEFF/, '');
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === 'object') {
+            if (typeof obj.node_id === 'string' && obj.node_id.trim()) cfg.node_id = obj.node_id.trim();
+            if (typeof obj.relay_token === 'string') cfg.relay_token = obj.relay_token.trim();
+            if (Array.isArray(obj.peers)) {
+                cfg.peers = obj.peers.map(s => String(s || '').trim()).filter(Boolean);
+            }
+        }
+    } catch (e) {
+        // 配置错误不阻断启动：仅记录到控制台
+        console.log(`[WARN] 读取 cluster.json 失败: ${e.message}`);
+    }
+
+    return cfg;
+}
+
+const _cluster = loadClusterConfig();
+const FARMING_NODE_ID = _cluster.node_id;
+const FARMING_RELAY_TOKEN = _cluster.relay_token;
+const FARMING_PEERS = _cluster.peers;
+
+function _httpPostJson(urlStr, body, headers = {}, timeoutMs = 2000) {
+    return new Promise((resolve) => {
+        try {
+            const u = new URL(urlStr);
+            const isHttps = u.protocol === 'https:';
+            const lib = isHttps ? https : http;
+            const payload = Buffer.from(JSON.stringify(body || {}), 'utf8');
+
+            const req = lib.request({
+                protocol: u.protocol,
+                hostname: u.hostname,
+                port: u.port || (isHttps ? 443 : 80),
+                path: u.pathname + (u.search || ''),
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Content-Length': payload.length,
+                    ...headers
+                },
+                timeout: timeoutMs
+            }, (resp) => {
+                resp.on('data', () => {});
+                resp.on('end', () => resolve({ ok: resp.statusCode >= 200 && resp.statusCode < 300, status: resp.statusCode }));
+            });
+
+            req.on('timeout', () => {
+                try { req.destroy(new Error('timeout')); } catch (e) {}
+                resolve({ ok: false, status: 0, reason: 'timeout' });
+            });
+            req.on('error', (e) => resolve({ ok: false, status: 0, reason: e.message }));
+
+            req.write(payload);
+            req.end();
+        } catch (e) {
+            resolve({ ok: false, status: 0, reason: e.message });
+        }
+    });
+}
+
+function broadcastToFarmingPeers(payload) {
+    if (!FARMING_PEERS || FARMING_PEERS.length === 0) return;
+
+    const headers = {
+        'x-relay-origin': FARMING_NODE_ID,
+        ...(FARMING_RELAY_TOKEN ? { 'x-relay-token': FARMING_RELAY_TOKEN } : {})
+    };
+
+    // 最小策略：并发转发，不等待结果（展示/挂机原流程不依赖回包）
+    FARMING_PEERS.slice(0, 20).forEach((base) => {
+        const url = base.replace(/\/+$/, '') + '/api/relay/farming';
+        _httpPostJson(url, payload, headers, 2000).then(() => {});
+    });
+}
 
 // farming 主号状态：等待队列（用于 /api/farming/leaders_status）
 let _farmingLeadersStatusWaiters = [];
@@ -265,6 +361,40 @@ function cleanupAndStopProcess(key) {
 // API 路由
 // ============================================
 
+// 跨机器转发入口（被 A 机调用）
+// 注意：该接口只负责把命令写入本机 farming stdin，不做任何二次转发，避免循环
+app.post('/api/relay/farming', (req, res) => {
+    // 可选鉴权
+    if (FARMING_RELAY_TOKEN) {
+        const token = String(req.headers['x-relay-token'] || '');
+        if (token !== FARMING_RELAY_TOKEN) {
+            return res.status(403).json({ error: 'forbidden' });
+        }
+    }
+
+    // 若转发目标就是自己（A 把 A 也写进 peers），直接忽略，避免重复执行
+    const origin = String(req.headers['x-relay-origin'] || '').trim();
+    if (origin && origin === FARMING_NODE_ID) {
+        return res.json({ success: true, ignored: true });
+    }
+
+    const payload = req.body || {};
+    if (!payload || typeof payload.type !== 'string') {
+        return res.status(400).json({ error: 'invalid_payload' });
+    }
+
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+
+    try {
+        processes.farming.process.stdin.write(JSON.stringify(payload) + '\n');
+        return res.json({ success: true });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
 // 获取状态
 app.get('/api/status', (req, res) => {
     res.json({
@@ -298,6 +428,10 @@ app.post('/api/dissolve_rooms', (req, res) => {
     } else {
         broadcastLog('System', `挂机车队未运行，无法发送解散命令`, 'warning');
     }
+
+    // 🔴 多机广播：转发给其他机器的 farming（以及你配置里可能包含的 A）
+    // 不等待回包，原流程不变
+    broadcastToFarmingPeers({ type: 'dissolve_rooms', roomIds });
     
     res.json({ success: true, message: `已广播解散 ${roomIds.length} 个房间` });
 });
@@ -323,6 +457,9 @@ app.post('/api/settle_rooms', (req, res) => {
     } else {
         broadcastLog('System', `挂机车队未运行，无法发送结算命令`, 'warning');
     }
+
+    // 🔴 多机广播：转发给其他机器的 farming（不等待回包）
+    broadcastToFarmingPeers({ type: 'settle_rooms', count, excludeRoomIds });
 
     res.json({ success: true, message: `已请求结算 ${count} 个房间` });
 });
