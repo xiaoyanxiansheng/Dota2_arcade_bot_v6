@@ -1,0 +1,12 @@
+{
+  "//": "三机广播配置示例（A/B/C 机器代码完全一致）",
+  "//2": "把本文件复制为 config/cluster.json，并按机器分别修改 node_id",
+  "node_id": "A",
+  "relay_token": "CHANGE_ME_OR_EMPTY",
+  "peers": [
+    "http://A-IP-OR-HOST:3000",
+    "http://B-IP-OR-HOST:3000",
+    "http://C-IP-OR-HOST:3000"
+  ]
+}
+
