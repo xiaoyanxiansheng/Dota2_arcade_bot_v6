@@ -720,7 +720,8 @@
                             farmingTotalStartTime = Date.now();
                             farmingTotalElapsed.value = 0;
                             farmingTotalFollowers.value = 0;
-                            loadedFarmConfigs.value = new Set(['config_000']); // 重置已加载配置
+                            // ✅ 不在前端硬重置，改为从服务端恢复池子状态（避免刷新/重连后状态错乱）
+                            refreshLoadedFarmConfigsFromServer();
                             
                             farmingElapsedTimer = setInterval(() => {
                                 // 更新总运行时间
@@ -1039,11 +1040,27 @@
                 };
 
                 // Farm 配置相关方法
+                const refreshLoadedFarmConfigsFromServer = async () => {
+                    try {
+                        const res = await fetch('/api/farm/pool');
+                        const data = await res.json();
+                        const set = new Set(['config_000']);
+                        (data.configs || []).forEach(name => {
+                            if (name && name !== 'config_000') set.add(name);
+                        });
+                        loadedFarmConfigs.value = set;
+                    } catch (e) {
+                        loadedFarmConfigs.value = new Set(['config_000']);
+                    }
+                };
+
                 const refreshFarmConfigs = async () => {
                     try {
                         const res = await fetch('/api/farm/configs');
                         const data = await res.json();
                         farmConfigs.value = data.configs || [];
+                        // ✅ 刷新浏览器后从服务端恢复“已加入池子”的状态
+                        await refreshLoadedFarmConfigsFromServer();
                     } catch (e) {
                         console.error('加载 Farm 配置失败', e);
                     }
@@ -1141,9 +1158,8 @@
                             body: JSON.stringify({ configName })
                         });
                         if (res.ok) {
-                            loadedFarmConfigs.value.add(configName);
-                            // 触发响应式更新
-                            loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                            // ✅ 以服务端为准（已持久化），重新拉取一次池子状态
+                            await refreshLoadedFarmConfigsFromServer();
                         } else {
                             const err = await res.json();
                             alert('操作失败: ' + err.error);
@@ -1163,8 +1179,7 @@
                             body: JSON.stringify({ configName })
                         });
                         if (res.ok) {
-                            loadedFarmConfigs.value.delete(configName);
-                            loadedFarmConfigs.value = new Set(loadedFarmConfigs.value);
+                            await refreshLoadedFarmConfigsFromServer();
                         } else {
                             const err = await res.json();
                             alert('操作失败: ' + err.error);
@@ -1265,6 +1280,7 @@
                     refreshFarmConfigs, showFarmConfigs, addFarmConfig, editFarmConfig,
                     saveFarmConfig, addConfigToPool, formatElapsed,
                     removeConfigFromPool,
+                    refreshLoadedFarmConfigsFromServer,
                     // 残留清理
                     cleanupConfigName, cleanupConfigNow,
                     // 工具进度

@@ -420,6 +420,9 @@ class FollowerBot {
         this.loginTimeoutHandle = null;  // 登录超时定时器
         this.joinTimeoutHandle = null;   // 加入房间超时定时器
         this.stopped = false;
+        // 永久失败（例如 InvalidPassword）：只记录一次并从系统中剔除
+        this.permanentFailed = false;
+        this._invalidPasswordNotified = false;
 
         // CRC 数据
         this.knownCrc = "1396649696593898392";
@@ -583,6 +586,24 @@ class FollowerBot {
         
         // 清除登录超时定时器
         this.clearLoginTimeout();
+
+        // ✅ 只处理：InvalidPassword 一次性清出系统（不再回队列、不占用登录并发）
+        // 说明：截图里 msg=InvalidPassword（err.code 可能为 NO_CODE），因此以 message 为主判断
+        if (/InvalidPassword/i.test(errorMessage)) {
+            const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+            if (!this._invalidPasswordNotified) {
+                this._invalidPasswordNotified = true;
+                logWarning('Follower', `🛑 ${this.account.username} 密码错误(InvalidPassword) [${proxyIp}] → 永久剔除，不再重试`);
+            }
+            this.permanentFailed = true;
+            // 先清理网络连接/资源（会停止后续行为）
+            this.cleanup();
+            // 再从池子/队列/统计引用中摘除（避免继续占用并发/刷屏）
+            try {
+                this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.invalid_password' });
+            } catch (e) {}
+            return;
+        }
         
         // 记录代理失败，并打印详细错误信息
         const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';

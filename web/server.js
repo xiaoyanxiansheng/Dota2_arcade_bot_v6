@@ -18,6 +18,38 @@ app.use(express.static(path.join(__dirname, 'public')));
 const PORT = 3000;
 const PROJECT_ROOT = path.join(__dirname, '..');
 const DATA_DIR = path.join(PROJECT_ROOT, 'data');
+const FARM_POOL_FILE = path.join(DATA_DIR, 'farm_pool.json');
+
+// 确保 data 目录存在（用于持久化池子状态）
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// Farm 池子：已加入的配置名（不包含默认 config_000）
+let _farmPoolConfigs = new Set();
+function loadFarmPool() {
+    try {
+        if (!fs.existsSync(FARM_POOL_FILE)) {
+            _farmPoolConfigs = new Set();
+            return;
+        }
+        const raw = fs.readFileSync(FARM_POOL_FILE, 'utf8');
+        const json = JSON.parse(raw || '{}');
+        const list = Array.isArray(json.configs) ? json.configs : [];
+        _farmPoolConfigs = new Set(list.map(s => String(s).trim()).filter(Boolean));
+    } catch (e) {
+        _farmPoolConfigs = new Set();
+    }
+}
+
+function saveFarmPool() {
+    try {
+        const configs = Array.from(_farmPoolConfigs);
+        fs.writeFileSync(FARM_POOL_FILE, JSON.stringify({ configs }, null, 2), 'utf8');
+    } catch (e) {}
+}
+
+loadFarmPool();
 
 // farming 主号状态：等待队列（用于 /api/farming/leaders_status）
 let _farmingLeadersStatusWaiters = [];
@@ -482,7 +514,7 @@ app.get('/api/farm/configs', (req, res) => {
                     followers = content.split('\n').filter(line => line.trim() && line.includes(',')).length;
                 }
                 
-                return { name, followers };
+                return { name, followers, inPool: name !== 'config_000' && _farmPoolConfigs.has(name) };
             })
             .filter(cfg => cfg.followers > 0); // 只返回有小号的配置
         
@@ -490,6 +522,11 @@ app.get('/api/farm/configs', (req, res) => {
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
+});
+
+// 获取当前 Farm 池子配置（用于前端刷新后恢复状态）
+app.get('/api/farm/pool', (req, res) => {
+    res.json({ success: true, configs: Array.from(_farmPoolConfigs) });
 });
 
 // 读取单个 farm 配置（v4.0：只返回 followers.txt）
@@ -578,6 +615,12 @@ app.post('/api/farm/add_to_pool', (req, res) => {
         const command = JSON.stringify({ type: 'add_config', configName }) + '\n';
         processes.farming.process.stdin.write(command);
         broadcastLog('System', `已发送添加配置命令: ${configName}`, 'info');
+
+        // 持久化池子状态（不包含默认 config_000）
+        if (configName !== 'config_000') {
+            _farmPoolConfigs.add(String(configName));
+            saveFarmPool();
+        }
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -600,6 +643,11 @@ app.post('/api/farm/remove_from_pool', (req, res) => {
         const command = JSON.stringify({ type: 'remove_config', configName }) + '\n';
         processes.farming.process.stdin.write(command);
         broadcastLog('System', `已发送移除配置命令: ${configName}`, 'info');
+
+        if (configName !== 'config_000') {
+            _farmPoolConfigs.delete(String(configName));
+            saveFarmPool();
+        }
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });

@@ -305,6 +305,8 @@ class ShowcaseBot {
         this.lobbyCreatedAt = null;
         // Presence mode: 连续“消失(不在展示位)”开始时间（0=未消失）
         this.missingSince = 0;
+        // Watchdog: 最近一次在“展示位(查询列表中出现本 lobbyId)”被确认的时间戳（0=从未确认）
+        this.lastSeenInListAt = 0;
 
         // CRC 数据
         this.knownCrc = "1396649696593898392";
@@ -742,6 +744,15 @@ class ShowcaseManager {
         // Presence mode（简单稳定模式）- 仅保留这一套逻辑，避免双实现带来的排查成本
         this.presenceTimers = [];
         this.presenceLock = false;
+
+        // Watchdog（兜底）：A/B 同时都不在展示位持续超过阈值 → 退出进程，由外部脚本重启
+        this.startedAt = Date.now();
+        this.watchdog = {
+            enabled: true,
+            missingSince: 0, // A/B 同时都不在展示位 的开始时间
+            thresholdMs: (this.settings.stall_restart_minutes || 30) * 60 * 1000,
+            restarting: false
+        };
     }
 
     start() {
@@ -771,6 +782,9 @@ class ShowcaseManager {
 
         // 仅保留 Presence 模式（按需创建 + 结算1个 + 冷却）
         this.startPresenceMode();
+
+        // 启动兜底 watchdog
+        this.startWatchdog();
     }
     
     // 仅等待GC连接（用于预热，不创建房间）
@@ -846,6 +860,11 @@ class ShowcaseManager {
 
             const myLobbyId = bot.currentLobbyId?.toString();
             const inList = myLobbyId ? filteredLobbies.some(l => l.lobbyId?.toString() === myLobbyId) : false;
+
+            // Watchdog：只要本轮确认“在展示位”，就刷新时间戳
+            if (inList) {
+                bot.lastSeenInListAt = Date.now();
+            }
 
             // rotation_cycle_minutes：房间“有效活跃统计窗口”（你定义的语义）
             // 只要房间存在时间超过该阈值，就必须刷新（重新创建新房间），否则就算房间还在也没有展示活跃意义
@@ -948,6 +967,70 @@ class ShowcaseManager {
         } finally {
             this.presenceLock = false;
         }
+    }
+
+    // ========== Watchdog（兜底重启）==========
+    startWatchdog() {
+        if (!this.watchdog?.enabled) return;
+
+        const checkEveryMs = 60 * 1000; // 每分钟检查一次
+        const timer = setInterval(() => {
+            try {
+                this.watchdogTick();
+            } catch (e) {}
+        }, checkEveryMs);
+
+        this.presenceTimers.push(timer);
+    }
+
+    watchdogTick() {
+        if (!this.watchdog?.enabled) return;
+        if (this.watchdog.restarting) return;
+
+        const now = Date.now();
+        const thresholdMs = this.watchdog.thresholdMs || (30 * 60 * 1000);
+
+        const botA = this.bots?.[0];
+        const botB = this.bots?.[1];
+        if (!botA || !botB) return;
+
+        // 如果从未确认过在展示位，用 startedAt 作为起点（避免 lastSeen=0 导致无限大）
+        const lastA = botA.lastSeenInListAt || this.startedAt;
+        const lastB = botB.lastSeenInListAt || this.startedAt;
+
+        const absentForA = now - lastA;
+        const absentForB = now - lastB;
+
+        // “A 和 B 同时都不在展示位”：两者都超过阈值未被确认
+        const bothAbsent = absentForA >= thresholdMs && absentForB >= thresholdMs;
+
+        if (!bothAbsent) {
+            // 只要任意一个在阈值内被确认过，认为“没有同时都不在”，清零计时
+            this.watchdog.missingSince = 0;
+            return;
+        }
+
+        // 同时都不在：开始计时（这里只用于日志，触发条件仍以两者各自>=阈值为准）
+        if (!this.watchdog.missingSince) this.watchdog.missingSince = now;
+        const missingMin = Math.floor((now - this.watchdog.missingSince) / 60000);
+
+        logWarning(
+            'Showcase',
+            `Watchdog: A/B 同时都不在展示位已持续 ${missingMin} 分钟（阈值=${Math.floor(thresholdMs / 60000)}m），触发兜底重启`
+        );
+
+        this.triggerRestart('watchdog_ab_missing');
+    }
+
+    triggerRestart(reason) {
+        if (this.watchdog.restarting) return;
+        this.watchdog.restarting = true;
+
+        logError('Showcase', `兜底重启触发: ${reason}，将 cleanup() 后退出进程（由外部脚本等待1分钟再启动）`);
+
+        try { this.cleanup(); } catch (e) {}
+
+        setTimeout(() => process.exit(66), 1000);
     }
 
     queryLobbiesDetailed(bot) {
