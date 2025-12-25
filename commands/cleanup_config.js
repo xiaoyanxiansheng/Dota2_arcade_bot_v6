@@ -188,7 +188,11 @@ function cleanupOne(account, leadersConfig, steamDataDir) {
     const finish = (result) => {
       if (finished) return;
       finished = true;
+      // ⚠️ 不要在这里彻底移除所有监听后就放任 client 存活：底层 socket 可能在 logOff 后仍异步抛错，
+      // 如果没有 error 监听会导致进程崩溃（Unhandled 'error' event）。
+      // 处理策略：尽量清理非关键监听，但始终保留一个兜底 error 监听。
       try { client.removeAllListeners(); } catch (e) {}
+      try { client.on('error', () => {}); } catch (e) {}
       try { client.logOff(); } catch (e) {}
       resolve(result);
     };
