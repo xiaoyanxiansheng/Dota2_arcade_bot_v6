@@ -555,8 +555,24 @@ class FollowerBot {
         
         // LoggedInElsewhere: 账号已在别处登录（可能是之前的请求延迟成功了）
         // 解决：销毁 client，等待 3 秒，然后重新创建并登录，直到成功
-        if (errorMessage.includes('LoggedInElsewhere')) {
+        if (errorMessage.includes('LoggedInElsewhere') || errorMessage.includes('AlreadyLoggedInElsewhere')) {
             this.loggedInElsewhereRetry = (this.loggedInElsewhereRetry || 0) + 1;
+
+            // ✅ 达到上限后视为“账号不可用”，永久剔除，避免无限重连刷屏/占并发
+            // 说明：你日志里已经重建连接到第5次，且该号明确“不能用了”
+            const maxRetry = this.settings?.logged_in_elsewhere_max_retries || 5;
+            if (this.loggedInElsewhereRetry >= maxRetry) {
+                const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+                if (!this._loggedInElsewhereNotified) {
+                    this._loggedInElsewhereNotified = true;
+                    logWarning('Follower', `🛑 ${this.account.username} 已在别处登录(${this.loggedInElsewhereRetry}/${maxRetry}) [${proxyIp}] → 永久剔除，不再重试`);
+                }
+                this.permanentFailed = true;
+                // 销毁并摘除引用，确保不再进入登录队列/不再刷屏
+                try { this.cleanup(); } catch (e) {}
+                try { this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.logged_in_elsewhere' }); } catch (e) {}
+                return;
+            }
             
             // 只在第一次和每 5 次打印日志，避免刷屏
             if (this.loggedInElsewhereRetry === 1 || this.loggedInElsewhereRetry % 5 === 0) {
