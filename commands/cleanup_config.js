@@ -31,8 +31,11 @@ const k_EMsgProtoMask = 0x80000000;
 const projectRoot = path.join(__dirname, '..');
 
 const configName = process.argv[2];
-const intervalMs = Math.max(50, Math.min(2000, Number(process.argv[3] || 100))); // 默认 0.1 秒一个
-const maxInFlight = Math.max(1, Math.min(200, Number(process.argv[4] || 30)));   // 默认最多 30 个在途
+// 默认值偏保守会导致吞吐很低（在途上限/单任务超时决定了最大处理速率）
+// 提升默认并发：UI 不传参时也能更快清理；仍可通过命令行覆盖。
+const intervalMs = Math.max(20, Math.min(2000, Number(process.argv[3] || 50))); // 默认 0.05 秒一个
+// maxInFlight 默认提升到 1000；同时放开上限，否则会被 clamp 到过小值导致默认无效
+const maxInFlight = Math.max(1, Math.min(2000, Number(process.argv[4] || 1000)));   // 默认最多 1000 个在途
 
 if (!configName || !/^config_\d{3}$/.test(configName)) {
   console.log('用法: node commands/cleanup_config.js config_001 [intervalMs] [maxInFlight]');
