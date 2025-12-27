@@ -424,6 +424,12 @@ class FollowerBot {
         this.permanentFailed = false;
         this._invalidPasswordNotified = false;
 
+        // ✅ 新增：反复失败冷却（不改变原逻辑，只是降低“无限刷重试”带来的资源占用）
+        this.consecutiveLoginFailures = 0; // 连续登录失败次数（超时/网络/429 等）
+        this.nextRetryAt = 0;              // 下次允许重试的时间戳(ms)，到点前跳过
+        this._cooldownNotifiedAt = 0;      // 冷却日志节流
+        this._loggedInElsewhereNotified = false;
+
         // CRC 数据
         this.knownCrc = "1396649696593898392";
         this.knownTimestamp = 1763646905;
@@ -440,6 +446,12 @@ class FollowerBot {
 
     // 开始登录（状态1 → 登录中）
     start() {
+        // 冷却期间不允许启动（由登录流水线跳过；这里再兜底一次）
+        if (this.nextRetryAt && Date.now() < this.nextRetryAt) {
+            this.state = FollowerState.PENDING;
+            this.pool.loginQueue.push(this);
+            return;
+        }
         this.state = FollowerState.LOGGING_IN;
         this.stopped = false;
         this.proxy = this.selectRandomProxy();
@@ -461,6 +473,19 @@ class FollowerBot {
                 const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
                 logWarning('Follower', `⏱️ ${this.account.username} 登录超时(30s) [${proxyIp}] → 放回队列`);
                 // 超时，清理并放回队列
+                this.consecutiveLoginFailures = (this.consecutiveLoginFailures || 0) + 1;
+                // 连续失败达到阈值后进入冷却，减少无限刷重试占用资源
+                const failThreshold = this.settings?.follower_cooldown_fail_threshold || 3;
+                const cooldownMs = this.settings?.follower_cooldown_ms || (10 * 60 * 1000);
+                if (this.consecutiveLoginFailures >= failThreshold) {
+                    this.nextRetryAt = Date.now() + cooldownMs;
+                    // 日志节流：最多每分钟提示一次
+                    const now = Date.now();
+                    if (!this._cooldownNotifiedAt || (now - this._cooldownNotifiedAt) > 60000) {
+                        this._cooldownNotifiedAt = now;
+                        logWarning('Follower', `🧊 ${this.account.username} 连续失败${this.consecutiveLoginFailures}次，冷却${Math.ceil(cooldownMs/60000)}分钟后再试`);
+                    }
+                }
                 this.cleanup();
                 this.state = FollowerState.PENDING;
                 this.pool.loginQueue.push(this);
@@ -620,6 +645,21 @@ class FollowerBot {
             } catch (e) {}
             return;
         }
+
+        // ✅ 新增：其他错误也计入“连续失败”，达到阈值则冷却一段时间再重试（避免无限刷重试占用资源）
+        // 注意：不改变原有“失败→回队列”的行为，只是增加 nextRetryAt 让流水线跳过一段时间
+        this.consecutiveLoginFailures = (this.consecutiveLoginFailures || 0) + 1;
+        const failThreshold = this.settings?.follower_cooldown_fail_threshold || 3;
+        const cooldownMs = this.settings?.follower_cooldown_ms || (10 * 60 * 1000);
+        if (this.consecutiveLoginFailures >= failThreshold) {
+            this.nextRetryAt = Date.now() + cooldownMs;
+            const now = Date.now();
+            if (!this._cooldownNotifiedAt || (now - this._cooldownNotifiedAt) > 60000) {
+                this._cooldownNotifiedAt = now;
+                const proxyIp2 = this.proxy?.split('@')[1] || 'no-proxy';
+                logWarning('Follower', `🧊 ${this.account.username} 连续失败${this.consecutiveLoginFailures}次 [${proxyIp2}]，冷却${Math.ceil(cooldownMs/60000)}分钟后再试`);
+            }
+        }
         
         // 记录代理失败，并打印详细错误信息
         const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
@@ -656,6 +696,10 @@ class FollowerBot {
             if (!this.is_gc_connected) {
                 this.is_gc_connected = true;
                 this.clearLoginTimeout();  // 登录成功，清除超时定时器
+                // ✅ 登录成功：清空连续失败/冷却
+                this.consecutiveLoginFailures = 0;
+                this.nextRetryAt = 0;
+                this._cooldownNotifiedAt = 0;
                 
                 // 记录代理成功
                 if (this.proxy) {
@@ -2210,39 +2254,50 @@ class FarmingManager {
         const NORMAL_INTERVAL = this.loginInterval; // 正常间隔（100ms）
         
         const processNext = () => {
-            const poolStats = this.pool.getStats();
+            // ✅ 保证流水线不会被偶发异常打断（否则会表现为“还有几千号没登但程序像暂停”）
+            try {
+                const poolStats = this.pool.getStats();
             
-            // 控制1：池子空闲小号足够，暂缓登录
-            if (poolStats.idle >= MAX_POOL_IDLE) {
-                // 池子够用，不急着登录，1秒后再检查
-                this.loginPipelineTimer = setTimeout(processNext, SLOW_INTERVAL);
-                return;
-            }
-            
-            // 控制2：正在登录的太多，等一等
-            if (poolStats.loggingIn >= MAX_LOGGING_IN) {
-                // 正在登录的已经够多了，500ms后再检查
-                this.loginPipelineTimer = setTimeout(processNext, 500);
-                return;
-            }
-            
-            // 正常取账号登录
-            if (this.pool.loginQueue.length > 0) {
-                const bot = this.pool.loginQueue.shift();
-                
-                // 只处理 PENDING 状态的小号
-                // 🔴 新增：移除中的小号直接跳过（不影响旧逻辑）
-                if (bot && bot.removing) {
-                    // skip
-                } else if (bot.state === FollowerState.PENDING) {
-                    bot.start();
-                } else {
-                    // 不是 PENDING 状态的跳过
+                // 控制1：池子空闲小号足够，暂缓登录
+                if (poolStats.idle >= MAX_POOL_IDLE) {
+                    // 池子够用，不急着登录，1秒后再检查
+                    this.loginPipelineTimer = setTimeout(processNext, SLOW_INTERVAL);
+                    return;
                 }
-            }
             
-            // 继续调度下一个
-            this.loginPipelineTimer = setTimeout(processNext, NORMAL_INTERVAL);
+                // 控制2：正在登录的太多，等一等
+                if (poolStats.loggingIn >= MAX_LOGGING_IN) {
+                    // 正在登录的已经够多了，500ms后再检查
+                    this.loginPipelineTimer = setTimeout(processNext, 500);
+                    return;
+                }
+            
+                // 正常取账号登录
+                if (this.pool.loginQueue.length > 0) {
+                    const bot = this.pool.loginQueue.shift();
+                
+                    // 只处理 PENDING 状态的小号
+                    // 🔴 新增：移除中的小号直接跳过（不影响旧逻辑）
+                    if (bot && bot.removing) {
+                        // skip
+                    } else if (bot && bot.permanentFailed) {
+                        // 永久失败：跳过
+                    } else if (bot && bot.nextRetryAt && Date.now() < bot.nextRetryAt) {
+                        // ✅ 冷却中：放回队尾，避免反复占用并发
+                        this.pool.loginQueue.push(bot);
+                    } else if (bot.state === FollowerState.PENDING) {
+                        bot.start();
+                    } else {
+                        // 不是 PENDING 状态的跳过
+                    }
+                }
+            
+                // 继续调度下一个
+                this.loginPipelineTimer = setTimeout(processNext, NORMAL_INTERVAL);
+            } catch (e) {
+                // 兜底：异常也要继续调度，避免流水线“断了”
+                this.loginPipelineTimer = setTimeout(processNext, 500);
+            }
         };
         
         // 启动流水线
