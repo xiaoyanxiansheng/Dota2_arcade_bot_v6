@@ -253,6 +253,16 @@ function cleanupAndStopProcess(key) {
     } catch (e) {
         broadcastLog('System', `发送退出命令失败: ${e.message}`, 'error');
     }
+
+    // ✅ 停止挂机车队时：重置“Farm 配置加入池子”的状态（只保留默认 config_000）
+    // 说明：该状态属于 Web 控制台的持久化选择（data/farm_pool.json），不清理会导致停服后仍显示“已加入”。
+    if (key === 'farming') {
+        try {
+            _farmPoolConfigs = new Set();
+            saveFarmPool();
+            broadcastLog('System', '已停止挂机车队：Farm 池子配置状态已重置', 'info');
+        } catch (e) {}
+    }
     
     // 设置超时：如果进程 5 秒内没有自己退出，强制杀掉
     const forceKillTimeout = setTimeout(() => {

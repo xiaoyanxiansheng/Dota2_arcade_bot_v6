@@ -741,6 +741,12 @@
                                 clearInterval(farmingElapsedTimer);
                                 farmingElapsedTimer = null;
                             }
+                            // ✅ 停止挂机车队后：重置“已加入池子”的配置状态（只保留默认 config_000）
+                            loadedFarmConfigs.value = new Set(['config_000']);
+                            // 如果当前在 Farm 配置页，顺手刷新一次列表（可选，保证 UI 立即正确）
+                            if (currentTab.value === 'farm_configs') {
+                                refreshFarmConfigs();
+                            }
                         }
                         
                         // 挂机车队启动后，拉一次主号状态
