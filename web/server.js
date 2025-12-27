@@ -18,38 +18,18 @@ app.use(express.static(path.join(__dirname, 'public')));
 const PORT = 3000;
 const PROJECT_ROOT = path.join(__dirname, '..');
 const DATA_DIR = path.join(PROJECT_ROOT, 'data');
-const FARM_POOL_FILE = path.join(DATA_DIR, 'farm_pool.json');
 
 // 确保 data 目录存在（用于持久化池子状态）
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Farm 池子：已加入的配置名（不包含默认 config_000）
-let _farmPoolConfigs = new Set();
-function loadFarmPool() {
-    try {
-        if (!fs.existsSync(FARM_POOL_FILE)) {
-            _farmPoolConfigs = new Set();
-            return;
-        }
-        const raw = fs.readFileSync(FARM_POOL_FILE, 'utf8');
-        const json = JSON.parse(raw || '{}');
-        const list = Array.isArray(json.configs) ? json.configs : [];
-        _farmPoolConfigs = new Set(list.map(s => String(s).trim()).filter(Boolean));
-    } catch (e) {
-        _farmPoolConfigs = new Set();
-    }
-}
-
-function saveFarmPool() {
-    try {
-        const configs = Array.from(_farmPoolConfigs);
-        fs.writeFileSync(FARM_POOL_FILE, JSON.stringify({ configs }, null, 2), 'utf8');
-    } catch (e) {}
-}
-
-loadFarmPool();
+// Farm 池子（运行态）：已加入的配置名（包含 config_000）。
+// ⚠️ 按需求：不能落盘，只跟着“程序(进程)”走。
+// 实现：优先从 farming 进程实时查询；同时缓存最近一次结果用于 fallback。
+let _farmPoolConfigs = new Set(['config_000']);
+let _farmLoadedConfigsWaiters = [];
+let _lastFarmLoadedConfigs = null;
 
 // farming 主号状态：等待队列（用于 /api/farming/leaders_status）
 let _farmingLeadersStatusWaiters = [];
@@ -127,6 +107,18 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT, logSource = null) 
                                 io.emit('farmingLeadersStatus', { data: obj.data });
                                 return; // 不输出到日志
                             }
+                            // 🔴 新增：farm 已加载配置（用于池子状态显示）
+                            if (obj.type === 'loaded_configs' && Array.isArray(obj.data)) {
+                                _lastFarmLoadedConfigs = obj.data;
+                                _farmPoolConfigs = new Set(['config_000', ...obj.data.map(x => String(x)).filter(Boolean)]);
+                                const waiters = _farmLoadedConfigsWaiters;
+                                _farmLoadedConfigsWaiters = [];
+                                waiters.forEach(w => {
+                                    try { w.resolve(obj.data); } catch (e) {}
+                                });
+                                io.emit('farmLoadedConfigs', { data: obj.data });
+                                return; // 不输出到日志
+                            }
                             if (obj.type === 'stop_leader_result' || obj.type === 'start_leader_result') {
                                 io.emit('farmingLeaderActionResult', obj);
                                 return; // 不输出到日志
@@ -201,6 +193,14 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT, logSource = null) 
         processes[key].process = null;
         processes[key].startTime = null;
         io.emit('status', { [key]: false });
+
+        // farming 退出：清空运行态缓存，避免 UI 显示“已加入”残留
+        if (key === 'farming') {
+            _farmPoolConfigs = new Set(['config_000']);
+            _lastFarmLoadedConfigs = null;
+            _farmLoadedConfigsWaiters = [];
+            io.emit('farmLoadedConfigs', { data: ['config_000'] });
+        }
         
         // 如果是工具脚本，清除当前工具状态
         if (key === 'tool') {
@@ -255,12 +255,13 @@ function cleanupAndStopProcess(key) {
     }
 
     // ✅ 停止挂机车队时：重置“Farm 配置加入池子”的状态（只保留默认 config_000）
-    // 说明：该状态属于 Web 控制台的持久化选择（data/farm_pool.json），不清理会导致停服后仍显示“已加入”。
+    // 说明：该状态是运行态内存（不能落盘），停服时应复位，避免 UI 处于不正确逻辑。
     if (key === 'farming') {
         try {
-            _farmPoolConfigs = new Set();
-            saveFarmPool();
-            broadcastLog('System', '已停止挂机车队：Farm 池子配置状态已重置', 'info');
+            _farmPoolConfigs = new Set(['config_000']);
+            _lastFarmLoadedConfigs = null;
+            _farmLoadedConfigsWaiters = [];
+            broadcastLog('System', '已停止挂机车队：Farm 池子配置状态已重置(运行态内存)', 'info');
         } catch (e) {}
     }
     
@@ -524,7 +525,7 @@ app.get('/api/farm/configs', (req, res) => {
                     followers = content.split('\n').filter(line => line.trim() && line.includes(',')).length;
                 }
                 
-                return { name, followers, inPool: name !== 'config_000' && _farmPoolConfigs.has(name) };
+                return { name, followers, inPool: _farmPoolConfigs.has(name) };
             })
             .filter(cfg => cfg.followers > 0); // 只返回有小号的配置
         
@@ -536,6 +537,38 @@ app.get('/api/farm/configs', (req, res) => {
 
 // 获取当前 Farm 池子配置（用于前端刷新后恢复状态）
 app.get('/api/farm/pool', (req, res) => {
+    // 如果 farming 在运行：向 farming 查询一次最新 loaded_configs（运行态真实来源）
+    if (processes.farming.process && processes.farming.process.stdin) {
+        const timeoutMs = Number(req.query?.timeoutMs || 3000);
+        const timeout = Number.isFinite(timeoutMs) ? Math.max(500, Math.min(timeoutMs, 20000)) : 3000;
+        return (async () => {
+            try {
+                const data = await new Promise((resolve, reject) => {
+                    const waiter = {};
+                    const timer = setTimeout(() => {
+                        _farmLoadedConfigsWaiters = _farmLoadedConfigsWaiters.filter(w => w !== waiter);
+                        reject(new Error('timeout'));
+                    }, timeout);
+                    waiter.resolve = (d) => { clearTimeout(timer); resolve(d); };
+                    waiter.reject = (e) => { clearTimeout(timer); reject(e); };
+                    _farmLoadedConfigsWaiters.push(waiter);
+                    processes.farming.process.stdin.write(JSON.stringify({ type: 'get_loaded_configs' }) + '\n');
+                });
+                const set = new Set(['config_000', ...(data || []).map(x => String(x)).filter(Boolean)]);
+                _farmPoolConfigs = set;
+                return res.json({ success: true, configs: Array.from(_farmPoolConfigs) });
+            } catch (e) {
+                // 超时则回退到缓存
+                if (_lastFarmLoadedConfigs) {
+                    const set = new Set(['config_000', ..._lastFarmLoadedConfigs.map(x => String(x)).filter(Boolean)]);
+                    _farmPoolConfigs = set;
+                    return res.json({ success: true, configs: Array.from(_farmPoolConfigs), stale: true });
+                }
+                return res.json({ success: true, configs: Array.from(_farmPoolConfigs), stale: true });
+            }
+        })();
+    }
+    // farming 未运行：返回默认
     res.json({ success: true, configs: Array.from(_farmPoolConfigs) });
 });
 
@@ -625,12 +658,8 @@ app.post('/api/farm/add_to_pool', (req, res) => {
         const command = JSON.stringify({ type: 'add_config', configName }) + '\n';
         processes.farming.process.stdin.write(command);
         broadcastLog('System', `已发送添加配置命令: ${configName}`, 'info');
-
-        // 持久化池子状态（不包含默认 config_000）
-        if (configName !== 'config_000') {
-            _farmPoolConfigs.add(String(configName));
-            saveFarmPool();
-        }
+        // ✅ 运行态内存：立即更新（farming 进程也会实际加载；前端会再拉一次 /api/farm/pool 校验）
+        _farmPoolConfigs.add(String(configName));
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -653,11 +682,7 @@ app.post('/api/farm/remove_from_pool', (req, res) => {
         const command = JSON.stringify({ type: 'remove_config', configName }) + '\n';
         processes.farming.process.stdin.write(command);
         broadcastLog('System', `已发送移除配置命令: ${configName}`, 'info');
-
-        if (configName !== 'config_000') {
-            _farmPoolConfigs.delete(String(configName));
-            saveFarmPool();
-        }
+        if (configName !== 'config_000') _farmPoolConfigs.delete(String(configName));
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });

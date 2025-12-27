@@ -2661,6 +2661,17 @@ process.stdin.on('data', (data) => {
             return;
         }
 
+        // ✅ 新增：查询当前已加载配置（给 Web 控制台显示“已加入/未加入”使用）
+        if (cmd.type === 'get_loaded_configs') {
+            try {
+                const list = Array.from(manager.loadedConfigs || []);
+                console.log(JSON.stringify({ type: 'loaded_configs', data: list }));
+            } catch (e) {
+                console.log(JSON.stringify({ type: 'loaded_configs', data: [] }));
+            }
+            return;
+        }
+
         // 🔴 新增：移除配置（退出房间→退出登录→退出池子）
         if (cmd.type === 'remove_config' && cmd.configName) {
             logSection('收到移除配置命令');
