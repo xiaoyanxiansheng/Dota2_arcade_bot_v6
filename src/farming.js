@@ -1835,7 +1835,7 @@ class FarmingManager {
         this.stoppedLeaderUsernames = new Set();
         
         // 登录参数 - 流水线模式
-        this.loginInterval = 100;      // 每个小号间隔100ms
+        this.loginInterval = 10;      // 每个小号间隔10ms
         this.loginPipelineTimer = null; // 登录流水线定时器
         
         // 代理使用统计
@@ -2306,7 +2306,7 @@ class FarmingManager {
     startLoginPipeline() {
         // 🔴 动态计算控制参数（基于主号数量）
         const leaderCount = this.leaders.length || 1;
-        const MAX_LOGGING_IN = leaderCount * 50;      // 每个主号配 50 个同时登录上限
+        const MAX_LOGGING_IN = leaderCount * 200;      // 每个主号配 200 个同时登录上限
         const SLOW_INTERVAL = 1000;     // 暂缓时的检查间隔（1秒）
         const NORMAL_INTERVAL = this.loginInterval; // 正常间隔（100ms）
         
