@@ -1083,12 +1083,12 @@ class FollowerBot {
     
     // 主动退出房间（用于展示车队轮换时解散）
     leaveLobbyForDissolve() {
-        if (this.state !== FollowerState.IN_LOBBY) {
+        // ✅ 不再依赖 state（state 可能因延迟/丢消息不同步），只要 currentLobbyId 命中就退出
+        const lobbyId = this.currentLobbyId?.toString();
+        if (!lobbyId) {
             logWarning('Follower', `${this.account.username} 不在房间中，无需退出`);
             return;
         }
-        
-        const lobbyId = this.currentLobbyId?.toString() || 'unknown';
         logInfo('Follower', `${this.account.username} 主动退出房间 ${lobbyId}...`);
         
         try {
@@ -1102,7 +1102,7 @@ class FollowerBot {
         
         // 兜底机制：5秒后检查是否还在房间内，如果GC没通知则手动回池
         setTimeout(() => {
-            if (this.state === FollowerState.IN_LOBBY && this.currentLobbyId?.toString() === lobbyId) {
+            if (this.currentLobbyId?.toString() === lobbyId) {
                 logWarning('Follower', `${this.account.username} 未收到GC通知，手动回池`);
                 this.onLobbyRemoved();
             }
@@ -2541,7 +2541,7 @@ class FarmingManager {
         this.dissolveRooms(chosen.map(x => x.lobbyId));
     }
 
-    // 解散指定房间（让在这些房间中的小号退出）
+    // 解散指定房间：收到房间ID后，让“所有在这些房间里的账号（主号+小号）”全部退出
     dissolveRooms(roomIds) {
         if (!roomIds || roomIds.length === 0) {
             logWarning('System', '解散房间: 没有收到有效的房间ID');
@@ -2549,7 +2549,8 @@ class FarmingManager {
         }
         
         const roomIdSet = new Set(roomIds.map(id => id.toString()));
-        let matchedCount = 0;
+        let followerLeaveCount = 0;
+        let leaderLeaveCount = 0;
         
         // 统计当前小号在各房间的分布
         const roomStats = {};
@@ -2568,13 +2569,25 @@ class FarmingManager {
             const count = roomStats[idStr] || 0;
             logInfo('System', `   房间 ${idStr}: ${count} 个小号 ${count > 0 ? '→ 匹配!' : '→ 无小号'}`);
         });
+
+        // ✅ 主号：只要在目标房间里就退出（不区分主号/小号，目标是“房间里我方账号清空”）
+        try {
+            this.leaders.forEach(leader => {
+                const lid = leader?.currentLobbyId?.toString?.();
+                if (lid && roomIdSet.has(lid)) {
+                    leaderLeaveCount++;
+                    logInfo('主号', `👑[${leader.account?.username || 'unknown'}] 在房间 ${lid} 中，执行退出...`);
+                    try { leader.leaveLobby(); } catch (e) {}
+                }
+            });
+        } catch (e) {}
         
-        // 遍历所有小号，检查是否在要解散的房间中
+        // 小号：只要 currentLobbyId 命中就退出
         this.allFollowers.forEach(follower => {
             const followerLobbyId = follower.currentLobbyId?.toString();
             
             if (followerLobbyId && roomIdSet.has(followerLobbyId)) {
-                matchedCount++;
+                followerLeaveCount++;
                 logInfo('Follower', `${follower.account.username} 在房间 ${followerLobbyId} 中，执行退出...`);
                 
                 // 让小号主动退出房间
@@ -2582,7 +2595,7 @@ class FarmingManager {
             }
         });
         
-        logSuccess('System', `解散房间执行完成: 共 ${matchedCount} 个小号被要求退出`);
+        logSuccess('System', `解散房间执行完成: 小号退出=${followerLeaveCount} | 主号退出=${leaderLeaveCount}`);
     }
     
     cleanup() {
