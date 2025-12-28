@@ -424,11 +424,15 @@ class FollowerBot {
         this.permanentFailed = false;
         this._invalidPasswordNotified = false;
 
-        // ✅ 新增：反复失败冷却（不改变原逻辑，只是降低“无限刷重试”带来的资源占用）
+        // ✅ 新增：反复失败冷却（不改变原逻辑，只是降低"无限刷重试"带来的资源占用）
         this.consecutiveLoginFailures = 0; // 连续登录失败次数（超时/网络/429 等）
         this.nextRetryAt = 0;              // 下次允许重试的时间戳(ms)，到点前跳过
         this._cooldownNotifiedAt = 0;      // 冷却日志节流
         this._loggedInElsewhereNotified = false;
+
+        // ✅ 新增：异常计数（独立于冷却，用于"超过N次永久禁用"）
+        this.exceptionCount = 0;           // 异常累计次数（登录超时/代理超时/429等）
+        this._exceptionBanNotified = false;
 
         // CRC 数据
         this.knownCrc = "1396649696593898392";
@@ -472,6 +476,21 @@ class FollowerBot {
             if (this.state === FollowerState.LOGGING_IN && !this.is_gc_connected) {
                 const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
                 logWarning('Follower', `⏱️ ${this.account.username} 登录超时(30s) [${proxyIp}] → 放回队列`);
+                
+                // ✅ 异常计数 + 永久禁用（超过3次直接剔除，不再10分钟后重试）
+                this.exceptionCount = (this.exceptionCount || 0) + 1;
+                const banThreshold = this.settings?.exception_ban_threshold || 3;
+                if (this.exceptionCount > banThreshold) {
+                    if (!this._exceptionBanNotified) {
+                        this._exceptionBanNotified = true;
+                        logWarning('Follower', `🚫 ${this.account.username} 异常累计${this.exceptionCount}次(>${banThreshold}) [${proxyIp}] → 永久禁用`);
+                    }
+                    this.permanentFailed = true;
+                    this.cleanup();
+                    try { this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.exception_ban_timeout' }); } catch (e) {}
+                    return;
+                }
+                
                 // 超时，清理并放回队列
                 this.consecutiveLoginFailures = (this.consecutiveLoginFailures || 0) + 1;
                 // 连续失败达到阈值后进入冷却，减少无限刷重试占用资源
@@ -579,29 +598,27 @@ class FollowerBot {
         const errorMessage = err.message || err.toString();
         
         // LoggedInElsewhere: 账号已在别处登录（可能是之前的请求延迟成功了）
-        // 解决：销毁 client，等待 3 秒，然后重新创建并登录，直到成功
+        // ✅ 改为纳入异常计数体系，超过阈值永久禁用
         if (errorMessage.includes('LoggedInElsewhere') || errorMessage.includes('AlreadyLoggedInElsewhere')) {
-            this.loggedInElsewhereRetry = (this.loggedInElsewhereRetry || 0) + 1;
-
-            // ✅ 达到上限后视为“账号不可用”，永久剔除，避免无限重连刷屏/占并发
-            // 说明：你日志里已经重建连接到第5次，且该号明确“不能用了”
-            const maxRetry = this.settings?.logged_in_elsewhere_max_retries || 5;
-            if (this.loggedInElsewhereRetry >= maxRetry) {
-                const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
-                if (!this._loggedInElsewhereNotified) {
-                    this._loggedInElsewhereNotified = true;
-                    logWarning('Follower', `🛑 ${this.account.username} 已在别处登录(${this.loggedInElsewhereRetry}/${maxRetry}) [${proxyIp}] → 永久剔除，不再重试`);
+            this.exceptionCount = (this.exceptionCount || 0) + 1;
+            const banThreshold = this.settings?.exception_ban_threshold || 3;
+            const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+            
+            // ✅ 超过阈值：永久禁用
+            if (this.exceptionCount > banThreshold) {
+                if (!this._exceptionBanNotified) {
+                    this._exceptionBanNotified = true;
+                    logWarning('Follower', `🚫 ${this.account.username} 已在别处登录，异常累计${this.exceptionCount}次(>${banThreshold}) [${proxyIp}] → 永久禁用`);
                 }
                 this.permanentFailed = true;
-                // 销毁并摘除引用，确保不再进入登录队列/不再刷屏
                 try { this.cleanup(); } catch (e) {}
-                try { this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.logged_in_elsewhere' }); } catch (e) {}
+                try { this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.logged_in_elsewhere_ban' }); } catch (e) {}
                 return;
             }
             
-            // 只在第一次和每 5 次打印日志，避免刷屏
-            if (this.loggedInElsewhereRetry === 1 || this.loggedInElsewhereRetry % 5 === 0) {
-                logWarning('Follower', `${this.account.username} 账号已在别处登录 → 重建连接 (第${this.loggedInElsewhereRetry}次)`);
+            // 只在第一次和每 3 次打印日志，避免刷屏
+            if (this.exceptionCount === 1 || this.exceptionCount % 3 === 0) {
+                logWarning('Follower', `${this.account.username} 账号已在别处登录(${this.exceptionCount}/${banThreshold}) → 重建连接`);
             }
             
             // 1. 销毁旧 client
@@ -612,14 +629,14 @@ class FollowerBot {
             this.is_gc_connected = false;
             this.state = FollowerState.PENDING;
             
-            // 2. 等待 3 秒后重新开始登录（不走失败池，直接重试，直到成功）
+            // 2. 等待 3 秒后重新开始登录
             setTimeout(() => {
-                if (!this.stopped) {
-                    this.start();  // 重新创建 client 并登录
+                if (!this.stopped && !this.permanentFailed) {
+                    this.start();
                 }
             }, 3000);
             
-            return;  // 不放入失败池，直接重试
+            return;
         }
         
         // 重置 LoggedInElsewhere 计数器（其他错误说明连接状态已改变）
@@ -646,8 +663,31 @@ class FollowerBot {
             return;
         }
 
-        // ✅ 新增：其他错误也计入“连续失败”，达到阈值则冷却一段时间再重试（避免无限刷重试占用资源）
-        // 注意：不改变原有“失败→回队列”的行为，只是增加 nextRetryAt 让流水线跳过一段时间
+        // 记录代理失败，并打印详细错误信息
+        const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+        const errorCode = err.code || 'NO_CODE';
+        const isProxyTimeout = errorMessage.includes('timed out') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('Proxy connection timed out');
+        const isConnectionError = ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(errorCode);
+        const is429 = errorMessage.includes('429') || errorMessage.includes('RateLimitExceeded') || errorMessage.includes('Too Many Requests');
+        
+        // ✅ 异常类错误（代理超时/429/连接错误）计入异常计数，超过阈值永久禁用
+        const isExceptionError = isProxyTimeout || is429 || isConnectionError;
+        if (isExceptionError) {
+            this.exceptionCount = (this.exceptionCount || 0) + 1;
+            const banThreshold = this.settings?.exception_ban_threshold || 3;
+            if (this.exceptionCount > banThreshold) {
+                if (!this._exceptionBanNotified) {
+                    this._exceptionBanNotified = true;
+                    logWarning('Follower', `🚫 ${this.account.username} 异常累计${this.exceptionCount}次(>${banThreshold}) [${proxyIp}] → 永久禁用`);
+                }
+                this.permanentFailed = true;
+                this.cleanup();
+                try { this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.exception_ban_error' }); } catch (e) {}
+                return;
+            }
+        }
+        
+        // ✅ 连续失败计入冷却（保留原有逻辑，但异常类已被上面拦截，这里主要处理其他错误）
         this.consecutiveLoginFailures = (this.consecutiveLoginFailures || 0) + 1;
         const failThreshold = this.settings?.follower_cooldown_fail_threshold || 3;
         const cooldownMs = this.settings?.follower_cooldown_ms || (10 * 60 * 1000);
@@ -656,16 +696,9 @@ class FollowerBot {
             const now = Date.now();
             if (!this._cooldownNotifiedAt || (now - this._cooldownNotifiedAt) > 60000) {
                 this._cooldownNotifiedAt = now;
-                const proxyIp2 = this.proxy?.split('@')[1] || 'no-proxy';
-                logWarning('Follower', `🧊 ${this.account.username} 连续失败${this.consecutiveLoginFailures}次 [${proxyIp2}]，冷却${Math.ceil(cooldownMs/60000)}分钟后再试`);
+                logWarning('Follower', `🧊 ${this.account.username} 连续失败${this.consecutiveLoginFailures}次 [${proxyIp}]，冷却${Math.ceil(cooldownMs/60000)}分钟后再试`);
             }
         }
-        
-        // 记录代理失败，并打印详细错误信息
-        const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
-        const errorCode = err.code || 'NO_CODE';
-        const isProxyTimeout = errorMessage.includes('timed out') || errorMessage.includes('ETIMEDOUT');
-        const isConnectionError = ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(errorCode);
         
         if (this.proxy && isProxyTimeout) {
             this.manager.recordProxyFailure(this.proxy);
@@ -674,6 +707,8 @@ class FollowerBot {
         // 打印详细错误信息（区分错误类型）
         if (isProxyTimeout) {
             logWarning('Follower', `🔌 ${this.account.username} 代理超时 [${proxyIp}] code=${errorCode} → 放回队列`);
+        } else if (is429) {
+            logWarning('Follower', `🚦 ${this.account.username} 限流429 [${proxyIp}] code=${errorCode} → 放回队列`);
         } else if (isConnectionError) {
             logWarning('Follower', `🔗 ${this.account.username} 连接错误 [${proxyIp}] code=${errorCode} → 放回队列`);
         } else {
@@ -2244,23 +2279,49 @@ class FarmingManager {
         return { success: true, count: bots.length, inLobby, cleaned };
     }
 
-    // 登录流水线：智能控制登录速度
+    // ✅ 计算当前池子缺口（所有主号房间的缺口总和）
+    _calcPoolDemand() {
+        let totalDemand = 0;
+        const maxPerRoom = (this.settings.max_players_per_room || 24) - 2; // 每房间最多小号数
+        
+        // 遍历所有主号，累计各房间的缺口
+        this.leaders.forEach(leader => {
+            if (leader.stopped) return;
+            if (!leader.currentLobbyId) return;
+            const lobbyId = leader.currentLobbyId.toString();
+            const assigned = this.pool.assigned.get(lobbyId);
+            const assignedCount = Array.isArray(assigned) ? assigned.length : 0;
+            const missing = Math.max(0, maxPerRoom - assignedCount);
+            totalDemand += missing;
+        });
+        
+        // 加上等待中的主号数量（即将创建房间）* 每房间人数
+        const waitingLeaderCount = this.pool.waitingLeaders.length;
+        totalDemand += waitingLeaderCount * maxPerRoom;
+        
+        return totalDemand;
+    }
+
+    // 登录流水线：智能控制登录速度（只看池子需求）
     startLoginPipeline() {
         // 🔴 动态计算控制参数（基于主号数量）
         const leaderCount = this.leaders.length || 1;
-        const MAX_POOL_IDLE = leaderCount * 100;      // 每个主号配 100 个池子空闲上限
         const MAX_LOGGING_IN = leaderCount * 50;      // 每个主号配 50 个同时登录上限
         const SLOW_INTERVAL = 1000;     // 暂缓时的检查间隔（1秒）
         const NORMAL_INTERVAL = this.loginInterval; // 正常间隔（100ms）
         
         const processNext = () => {
-            // ✅ 保证流水线不会被偶发异常打断（否则会表现为“还有几千号没登但程序像暂停”）
+            // ✅ 保证流水线不会被偶发异常打断（否则会表现为"还有几千号没登但程序像暂停"）
             try {
                 const poolStats = this.pool.getStats();
-            
-                // 控制1：池子空闲小号足够，暂缓登录
-                if (poolStats.idle >= MAX_POOL_IDLE) {
-                    // 池子够用，不急着登录，1秒后再检查
+                
+                // ✅ 核心改动：只看池子缺口，缺口 <= 0 则暂缓登录
+                const demand = this._calcPoolDemand();
+                const currentIdle = poolStats.idle;
+                const gap = demand - currentIdle; // 缺口 = 需求 - 当前空闲
+                
+                if (gap <= 0) {
+                    // 池子够用，不需要登录，1秒后再检查
                     this.loginPipelineTimer = setTimeout(processNext, SLOW_INTERVAL);
                     return;
                 }
@@ -2295,14 +2356,14 @@ class FarmingManager {
                 // 继续调度下一个
                 this.loginPipelineTimer = setTimeout(processNext, NORMAL_INTERVAL);
             } catch (e) {
-                // 兜底：异常也要继续调度，避免流水线“断了”
+                // 兜底：异常也要继续调度，避免流水线"断了"
                 this.loginPipelineTimer = setTimeout(processNext, 500);
             }
         };
         
         // 启动流水线
         processNext();
-        logInfo('Farming', `🚀 登录流水线已启动 (主号${leaderCount}个: 池子>${MAX_POOL_IDLE}暂缓, 登录中>${MAX_LOGGING_IN}等待)`);
+        logInfo('Farming', `🚀 登录流水线已启动 (主号${leaderCount}个: 只看池子缺口, 登录中>${MAX_LOGGING_IN}等待)`);
     }
 
     getStats() {
@@ -2444,11 +2505,11 @@ class FarmingManager {
 
         const targetGameId = this.settings.custom_game_id;
 
-        // 候选规则（安全优先）：
+        // 候选规则（按你的要求简化）：
         // - 必须是本游戏
-        // - 必须是带密码房（我方房间必带密码）
-        // - 必须能证明“房间内全部成员都是我方可控小号”：memberCount === 我方 IN_LOBBY 小号数
-        //   （这样清空后房间会真正消失，不会出现“别人的房间/有陌生人”导致解散无效）
+        // - 必须是带密码房（hasPassKey=true）
+        // - 只要能证明“房间里至少有我方 IN_LOBBY 小号”即可作为备选
+        //   （避免 memberCount 口径差异导致“永远选不到房间”）
         const candidates = lobbies
             .filter(l => l.customGameId?.toString() === targetGameId)
             .filter(l => l.hasPassKey === true)
@@ -2463,7 +2524,7 @@ class FarmingManager {
                     createdAt: l.lobbyCreationTime || 0
                 };
             })
-            .filter(x => x.lobbyId && x.ourInLobby > 0 && x.memberCount === x.ourInLobby)
+            .filter(x => x.lobbyId && x.ourInLobby > 0)
             .sort((a, b) => a.createdAt - b.createdAt); // 在“可解散”前提下优先最老
 
         if (candidates.length === 0) {
