@@ -324,6 +324,8 @@ class FollowerPool {
         toAssign.forEach(f => {
             f.state = FollowerState.ASSIGNED;
             f.assignedLobbyId = lobbyId;
+            // ✅ 记录分配时间，用于后续清理“僵尸分配”（大量代理异常时很关键）
+            f.assignedAt = Date.now();
         });
 
         logSuccess('Pool', `📤 分配 ${toAssign.length} 个小号 → 房间 ${lobbyId} (池子剩余: ${this.idle.length})`);
@@ -346,6 +348,8 @@ class FollowerPool {
             }
             follower.assignedLobbyId = null;
         }
+        // ✅ 清理分配时间戳
+        follower.assignedAt = 0;
 
         // 回到空闲池
         follower.currentLobbyId = null;
@@ -414,6 +418,7 @@ class FollowerBot {
         this.is_gc_connected = false;
         this.currentLobbyId = null;
         this.assignedLobbyId = null;
+        this.assignedAt = 0; // ✅ 分配时间戳（用于清理“僵尸分配”）
         this.retryCount = 0;
         this.maxRetries = 5;
         this.ready_up_heartbeat = null;
@@ -889,6 +894,9 @@ class FollowerBot {
         if (prevState === FollowerState.ASSIGNED) {
             logSuccess('Follower', `${this.account.username} 进入房间 ${this.assignedLobbyId}`);
         }
+
+        // ✅ 加入成功：清除分配时间戳
+        this.assignedAt = 0;
         
         // 设置队伍
         setTimeout(() => {
@@ -1847,6 +1855,70 @@ class FarmingManager {
         this._lobbyQueryTimeoutHandle = null;
         this._lobbyQueryFinish = null;
         this._lobbyQuerySender = null;
+
+        // ✅ 僵尸分配清理日志节流
+        this._lastPruneAssignedLogAt = 0;
+    }
+
+    // ✅ 清理 assigned 映射里长期卡住/状态错乱的小号引用，避免误判“房间已满”导致登录流水线停摆
+    pruneStaleAssigned() {
+        const now = Date.now();
+        const staleMs = this.settings?.assigned_stale_ms || (90 * 1000); // 默认 90 秒
+        const assignedMap = this.pool?.assigned;
+        if (!assignedMap || typeof assignedMap.forEach !== 'function') return;
+
+        let removed = 0;
+        let touchedRooms = 0;
+
+        try {
+            assignedMap.forEach((arr, lobbyId) => {
+                if (!Array.isArray(arr) || arr.length === 0) return;
+                const before = arr.length;
+
+                const kept = arr.filter((b) => {
+                    if (!b) return false;
+                    const cur = b.currentLobbyId?.toString?.();
+                    const asg = b.assignedLobbyId?.toString?.();
+
+                    // 明确在房间内：保留
+                    if (cur && cur === lobbyId) return true;
+
+                    // 分配中：未过期才保留
+                    if (b.state === FollowerState.ASSIGNED && asg && asg === lobbyId) {
+                        const at = Number(b.assignedAt || 0);
+                        if (at > 0 && (now - at) <= staleMs) return true;
+
+                        // 过期：丢弃引用并清空占坑字段
+                        try { b.assignedLobbyId = null; } catch (e) {}
+                        try { b.assignedAt = 0; } catch (e) {}
+                        return false;
+                    }
+
+                    // 其他状态不应该长期挂在 assigned：丢弃
+                    if (asg && asg === lobbyId) {
+                        try { b.assignedLobbyId = null; } catch (e) {}
+                        try { b.assignedAt = 0; } catch (e) {}
+                    }
+                    return false;
+                });
+
+                if (kept.length !== before) {
+                    removed += (before - kept.length);
+                    touchedRooms++;
+                    if (kept.length === 0) assignedMap.delete(lobbyId);
+                    else assignedMap.set(lobbyId, kept);
+                }
+            });
+        } catch (e) {}
+
+        // 节流：最多 30 秒提示一次
+        if (removed > 0) {
+            const last = this._lastPruneAssignedLogAt || 0;
+            if ((now - last) > 30000) {
+                this._lastPruneAssignedLogAt = now;
+                logWarning('Pool', `🧹 清理僵尸分配: 移除${removed}个引用，影响房间${touchedRooms}个（stale>${Math.round(staleMs/1000)}s）`);
+            }
+        }
     }
 
     // 🔴 新增：统一定位主号（username 或 index 兼容）
@@ -2281,8 +2353,13 @@ class FarmingManager {
 
     // ✅ 计算当前池子缺口（所有主号房间的缺口总和）
     _calcPoolDemand() {
+        // 每次计算前先清理一次僵尸分配，避免“需求=0”假死
+        this.pruneStaleAssigned();
+
         let totalDemand = 0;
         const maxPerRoom = (this.settings.max_players_per_room || 24) - 2; // 每房间最多小号数
+        const now = Date.now();
+        const staleMs = this.settings?.assigned_stale_ms || (90 * 1000);
         
         // 遍历所有主号，累计各房间的缺口
         this.leaders.forEach(leader => {
@@ -2290,7 +2367,19 @@ class FarmingManager {
             if (!leader.currentLobbyId) return;
             const lobbyId = leader.currentLobbyId.toString();
             const assigned = this.pool.assigned.get(lobbyId);
-            const assignedCount = Array.isArray(assigned) ? assigned.length : 0;
+            // 注意：不能直接用 assigned.length（会被“僵尸引用”污染），这里按“在房间内 + 未过期的分配中”计数
+            const assignedCount = Array.isArray(assigned)
+                ? assigned.filter((b) => {
+                    if (!b) return false;
+                    const cur = b.currentLobbyId?.toString?.();
+                    if (cur && cur === lobbyId) return true;
+                    if (b.state === FollowerState.ASSIGNED && b.assignedLobbyId?.toString?.() === lobbyId) {
+                        const at = Number(b.assignedAt || 0);
+                        return at > 0 && (now - at) <= staleMs;
+                    }
+                    return false;
+                }).length
+                : 0;
             const missing = Math.max(0, maxPerRoom - assignedCount);
             totalDemand += missing;
         });
@@ -2678,13 +2767,18 @@ setInterval(() => {
 
 // 异常处理
 process.on('uncaughtException', (err) => {
+    const msg = err?.message || String(err);
+    // ✅ 代理超时属于高频噪音，且会拖慢事件循环（刷屏+阻塞定时器），这里直接忽略/节流
+    if (msg.includes('Proxy connection timed out')) return;
     if (['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED'].includes(err.code)) return;
-    logError('System', `未捕获的异常: ${err.message}`);
+    logError('System', `未捕获的异常: ${msg}`);
 });
 
 process.on('unhandledRejection', (reason) => {
+    const msg = (reason && (reason.message || String(reason))) || String(reason);
+    if (msg.includes('Proxy connection timed out')) return;
     if (reason?.code && ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED'].includes(reason.code)) return;
-    logError('System', `未处理的Promise拒绝: ${reason}`);
+    logError('System', `未处理的Promise拒绝: ${msg}`);
 });
 
 process.on('SIGINT', () => {
