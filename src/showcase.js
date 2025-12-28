@@ -945,15 +945,15 @@ class ShowcaseManager {
                 const newLobbyId = bot.currentLobbyId.toString();
                 logSuccess('Showcase', `主号${bot.label} 新房创建成功: ${newLobbyId}`);
 
-                // 结算：仅当展示位接近上限（>=阈值）才需要解散 1 个最老挂机房腾位
+                // 结算：仅当展示位接近上限（>=阈值）才需要解散 2 个最老挂机房腾位（提高命中率）
                 if (lobbyCount >= minLobbyCountForRotation) {
                     const showcaseLobbyIds = [
                         this.bots[0].currentLobbyId?.toString(),
                         this.bots[1].currentLobbyId?.toString()
                     ].filter(Boolean);
 
-                    logInfo('Showcase', `结算：房间数达到阈值(${lobbyCount}>=${minLobbyCountForRotation})，请求挂机车队“自动结算”1个可解散房间...`);
-                    await this.requestFarmingAutoSettle(1, showcaseLobbyIds);
+                    logInfo('Showcase', `结算：房间数达到阈值(${lobbyCount}>=${minLobbyCountForRotation})，请求挂机车队“自动结算”2个可解散房间...`);
+                    await this.requestFarmingAutoSettle(2, showcaseLobbyIds);
                 } else {
                     logInfo('Showcase', `结算：房间数未达阈值(${lobbyCount}<${minLobbyCountForRotation})，无需解散（跳过）`);
                 }
