@@ -263,8 +263,66 @@ class FollowerPool {
         this.idle = [];          // 空闲小号（已登录GC，等待分配）
         this.assigned = new Map(); // lobbyId -> [小号Bot数组]
         this.waitingLeaders = []; // 等待小号的主号回调队列
-        this.loginQueue = [];    // 登录队列（待登录/失败放回的小号）
+        // 登录队列（待登录/失败放回的小号）
+        // ⚠️ 不能用 Array.shift()：大队列下是 O(n) 移动元素，会严重拖慢事件循环
+        // 实现：array + head 指针 + Set 去重（remove 时仅删 Set，dequeue 自动跳过“失效项”）
+        this.loginQueue = [];
+        this._loginQueueHead = 0;
+        this._loginQueueSet = new Set();
         this.all = [];           // 所有小号引用
+    }
+
+    enqueueLogin(follower) {
+        if (!follower) return;
+        if (this._loginQueueSet.has(follower)) return;
+        this._loginQueueSet.add(follower);
+        this.loginQueue.push(follower);
+    }
+
+    removeFromLoginQueue(follower) {
+        if (!follower) return;
+        try { this._loginQueueSet.delete(follower); } catch (e) {}
+    }
+
+    removeFromLoginQueueByConfig(configName) {
+        const cfg = String(configName || '').trim();
+        if (!cfg) return;
+        try {
+            const toDel = [];
+            for (const bot of this._loginQueueSet) {
+                if (bot && bot.configName === cfg) toDel.push(bot);
+            }
+            toDel.forEach(b => this._loginQueueSet.delete(b));
+        } catch (e) {}
+    }
+
+    dequeueLogin() {
+        try {
+            while (this._loginQueueHead < this.loginQueue.length) {
+                const bot = this.loginQueue[this._loginQueueHead++];
+                if (!bot) continue;
+                if (!this._loginQueueSet.has(bot)) continue; // 已被 remove 掉：跳过
+                this._loginQueueSet.delete(bot);
+
+                // ✅ 适度压缩数组，避免无限增长
+                if (this._loginQueueHead > 5000 && this._loginQueueHead > (this.loginQueue.length / 2)) {
+                    this.loginQueue = this.loginQueue.slice(this._loginQueueHead);
+                    this._loginQueueHead = 0;
+                }
+                return bot;
+            }
+
+            // 队列已耗尽：重置
+            this.loginQueue = [];
+            this._loginQueueHead = 0;
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    getQueueLength() {
+        return this._loginQueueSet.size;
     }
 
     // 有小号回池/入池时，尽量唤醒更多等待的主号（避免“池子来了一堆人但只唤醒1个主号”）
@@ -299,9 +357,7 @@ class FollowerPool {
         // 目的：避免“加入失败/超时后立即回池又被马上分配”，导致持续抖动刷重试
         if (follower && follower.nextRetryAt && Date.now() < follower.nextRetryAt) {
             follower.state = FollowerState.PENDING;
-            if (!this.loginQueue.includes(follower)) {
-                this.loginQueue.push(follower);
-            }
+            this.enqueueLogin(follower);
             return;
         }
         if (!this.idle.includes(follower)) {
@@ -408,11 +464,7 @@ class FollowerPool {
 
             // 4) 状态改为 PENDING，并可选入队（去重）
             follower.state = FollowerState.PENDING;
-            if (enqueue && Array.isArray(this.loginQueue)) {
-                if (!this.loginQueue.includes(follower)) {
-                    this.loginQueue.push(follower);
-                }
-            }
+            if (enqueue) this.enqueueLogin(follower);
         } catch (e) {}
     }
 
@@ -442,7 +494,7 @@ class FollowerPool {
             assigned: assignedCount,         // 正在加入
             inLobby: inLobbyCount,           // 已进入房间
             loggingIn: loggingInCount,       // 正在登录
-            queueLength: this.loginQueue.length, // 登录队列长度
+            queueLength: this.getQueueLength(),  // 登录队列长度（真实队列：set size）
             total: this.all.length           // 总数
         };
     }
@@ -501,9 +553,7 @@ class FollowerBot {
         // 冷却期间不允许启动（由登录流水线跳过；这里再兜底一次）
         if (this.nextRetryAt && Date.now() < this.nextRetryAt) {
             this.state = FollowerState.PENDING;
-            if (!this.pool.loginQueue.includes(this)) {
-                this.pool.loginQueue.push(this);
-            }
+            this.pool.enqueueLogin(this);
             return;
         }
         this.state = FollowerState.LOGGING_IN;
@@ -529,9 +579,7 @@ class FollowerBot {
                 logWarning('Follower', `⏱️ ${this.account.username} 登录超时(30s) [${proxyIp}] → ${Math.ceil(this.FOLLOWER_RETRY_DELAY_MS / 60000)}分钟后重试`);
                 this.cleanup();
                 this.state = FollowerState.PENDING;
-                if (!this.pool.loginQueue.includes(this)) {
-                    this.pool.loginQueue.push(this);
-                }
+                this.pool.enqueueLogin(this);
             }
         }, this.LOGIN_TIMEOUT);
         
@@ -571,9 +619,7 @@ class FollowerBot {
                 this.nextRetryAt = Date.now() + this.FOLLOWER_RETRY_DELAY_MS;
                 this.cleanup();
                 this.state = FollowerState.PENDING;
-                if (!this.pool.loginQueue.includes(this)) {
-                    this.pool.loginQueue.push(this);
-                }
+                this.pool.enqueueLogin(this);
             }
         });
 
@@ -642,9 +688,7 @@ class FollowerBot {
                     this.pool.idle = this.pool.idle.filter(x => x !== this);
                 }
                 this.state = FollowerState.PENDING;
-                if (!this.pool.loginQueue.includes(this)) {
-                    this.pool.loginQueue.push(this);
-                }
+                this.pool.enqueueLogin(this);
             }
             
             return;
@@ -712,9 +756,7 @@ class FollowerBot {
 
         this.state = FollowerState.PENDING;
         // 放回登录队列末尾，等待下次轮到
-        if (!this.pool.loginQueue.includes(this)) {
-            this.pool.loginQueue.push(this);
-        }
+        this.pool.enqueueLogin(this);
     }
 
     handleGCMessage(appid, msgType, payload) {
@@ -2145,7 +2187,7 @@ class FarmingManager {
                 this.configFollowers.get(configName).add(bot);
                 this.allFollowers.push(bot);
                 this.pool.all.push(bot);
-                this.pool.loginQueue.push(bot);  // 加入登录队列
+                this.pool.enqueueLogin(bot);  // 加入登录队列（去重+O(1)）
             });
             
             logSuccess(configName, `${followers.length} 个小号已加入登录队列`);
@@ -2170,9 +2212,7 @@ class FarmingManager {
 
         try {
             // 1) 登录队列移除
-            if (Array.isArray(this.pool?.loginQueue) && this.pool.loginQueue.length > 0) {
-                this.pool.loginQueue = this.pool.loginQueue.filter(x => x !== follower);
-            }
+            try { this.pool?.removeFromLoginQueue?.(follower); } catch (e) {}
 
             // 2) 池子空闲移除
             if (Array.isArray(this.pool?.idle) && this.pool.idle.length > 0) {
@@ -2243,9 +2283,7 @@ class FarmingManager {
         });
 
         // 移除登录队列中属于该配置的 bot
-        if (Array.isArray(this.pool?.loginQueue) && this.pool.loginQueue.length > 0) {
-            this.pool.loginQueue = this.pool.loginQueue.filter(b => !(b && b.configName === configName));
-        }
+        try { this.pool?.removeFromLoginQueueByConfig?.(configName); } catch (e) {}
 
         // 移除 idle 池中属于该配置的 bot
         if (Array.isArray(this.pool?.idle) && this.pool.idle.length > 0) {
@@ -2383,8 +2421,8 @@ class FarmingManager {
                 }
             
                 // 正常取账号登录
-                if (this.pool.loginQueue.length > 0) {
-                    const bot = this.pool.loginQueue.shift();
+                if (this.pool.getQueueLength() > 0) {
+                    const bot = this.pool.dequeueLogin();
                 
                     // 只处理 PENDING 状态的小号
                     // 🔴 新增：移除中的小号直接跳过（不影响旧逻辑）
@@ -2394,7 +2432,7 @@ class FarmingManager {
                         // 永久失败：跳过
                     } else if (bot && bot.nextRetryAt && Date.now() < bot.nextRetryAt) {
                         // ✅ 冷却中：放回队尾，避免反复占用并发
-                        this.pool.loginQueue.push(bot);
+                        this.pool.enqueueLogin(bot);
                     } else if (bot.state === FollowerState.PENDING) {
                         bot.start();
                     } else {
@@ -2427,6 +2465,10 @@ class FarmingManager {
         });
 
         const totalElapsed = this.startTime ? Math.round((Date.now() - this.startTime) / 1000) : 0;
+        const target = Number(this.targetFollowers || 0);
+        const activeFollowers = this.getActiveFollowerCount();
+        // ✅ UI/日志里“队列”按“待登录人数(目标-当前)”显示，避免 20001 全入队造成误解
+        const queueForDisplay = target > 0 ? Math.max(0, target - activeFollowers) : poolStats.queueLength;
 
         return {
             // 小号状态（详细）
@@ -2435,7 +2477,7 @@ class FarmingManager {
             assigned: poolStats.assigned,       // 正在加入
             poolIdle: poolStats.idle,           // 池子空闲
             loggingIn: poolStats.loggingIn,     // 正在登录
-            queueLength: poolStats.queueLength, // 登录队列长度
+            queueLength: queueForDisplay,       // 待登录人数（UI用）
             
             // 主号状态
             leadersActive,
@@ -2447,7 +2489,7 @@ class FarmingManager {
 
             // 目标/使用人数（用于 UI 显示）
             targetFollowers: this.targetFollowers || 0,
-            activeFollowers: this.getActiveFollowerCount(),
+            activeFollowers,
             
             // 时间
             totalElapsed
@@ -2723,7 +2765,7 @@ setInterval(() => {
     const totalElapsedSec = stats.totalElapsed % 60;
     
     // 详细统计格式 (流水线模式：队列替代失败)
-    logInfo('Stats', `总:${stats.total} ✅入:${stats.inLobby} ⏳加:${stats.assigned} 💤池:${stats.poolIdle} 🔄登:${stats.loggingIn} 📋队列:${stats.queueLength} | 🚪房:${stats.roomsCreated} 👑主:${stats.leadersActive}/${stats.leadersTotal} | ⏱️${totalElapsedMin}分${totalElapsedSec}秒 (${percentage}%)`);
+    logInfo('Stats', `总:${stats.total} ✅入:${stats.inLobby} ⏳加:${stats.assigned} 💤池:${stats.poolIdle} 🔄登:${stats.loggingIn} 📋队列:${stats.queueLength} | 🎯目:${stats.targetFollowers || 0} 🧮活:${stats.activeFollowers || 0} | 🚪房:${stats.roomsCreated} 👑主:${stats.leadersActive}/${stats.leadersTotal} | ⏱️${totalElapsedMin}分${totalElapsedSec}秒 (${percentage}%)`);
     
     // 打印代理使用统计
     manager.printProxyStats();

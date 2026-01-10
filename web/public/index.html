@@ -286,12 +286,13 @@
                         <!-- 第一行：小号状态 -->
                         <div class="flex items-center flex-wrap gap-x-3 gap-y-1 mb-1">
                             <span class="text-blue-400 font-bold">📊 挂机统计</span>
-                            <span class="text-gray-400">总:<span class="text-white font-bold">{{ farmingProgress.total }}</span></span>
+                            <span class="text-gray-400">最大:<span class="text-white font-bold">{{ farmingProgress.total }}</span></span>
+                            <span class="text-gray-400">🎯目:<span class="text-cyan-300 font-bold">{{ targetFollowersInput || 0 }}</span></span>
                             <span class="text-gray-400">✅入:<span class="text-green-400 font-bold">{{ farmingProgress.inLobby }}</span></span>
                             <span class="text-gray-400">⏳加:<span class="text-yellow-400">{{ farmingProgress.assigned }}</span></span>
                             <span class="text-gray-400">💤池:<span class="text-cyan-400">{{ farmingProgress.poolIdle }}</span></span>
                             <span class="text-gray-400">🔄登:<span class="text-blue-300">{{ farmingProgress.loggingIn }}</span></span>
-                            <span class="text-gray-400">📋队列:<span class="text-orange-400">{{ farmingProgress.queueLength }}</span></span>
+                            <span class="text-gray-400">📋待登:<span class="text-orange-400">{{ farmingProgress.queueLength }}</span></span>
                         </div>
                         <!-- 第二行：房间/主号/时间 -->
                         <div class="flex items-center flex-wrap gap-x-3 gap-y-1 text-xs border-t border-gray-700 pt-1">
