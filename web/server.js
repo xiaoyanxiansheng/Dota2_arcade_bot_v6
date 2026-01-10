@@ -35,6 +35,10 @@ let _lastFarmLoadedConfigs = null;
 let _farmingLeadersStatusWaiters = [];
 let _lastFarmingLeadersStatus = null;
 
+// farming 目标挂机人数：等待队列（用于 /api/farming/set_target_followers）
+let _farmingTargetFollowersWaiters = [];
+let _lastFarmingTargetFollowersResult = null;
+
 // 进程管理
 const processes = {
     showcase: { process: null, startTime: null },
@@ -121,6 +125,16 @@ function startProcess(key, command, args, cwd = PROJECT_ROOT, logSource = null) 
                             }
                             if (obj.type === 'stop_leader_result' || obj.type === 'start_leader_result') {
                                 io.emit('farmingLeaderActionResult', obj);
+                                return; // 不输出到日志
+                            }
+                            if (obj.type === 'set_target_followers_result') {
+                                _lastFarmingTargetFollowersResult = obj;
+                                const waiters = _farmingTargetFollowersWaiters;
+                                _farmingTargetFollowersWaiters = [];
+                                waiters.forEach(w => {
+                                    try { w.resolve(obj); } catch (e) {}
+                                });
+                                io.emit('farmingTargetFollowers', obj);
                                 return; // 不输出到日志
                             }
                         }
@@ -419,6 +433,92 @@ app.post('/api/farming/start_leader', (req, res) => {
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// 设置目标挂机人数（动态调整小号在线/可用人数）
+app.post('/api/farming/set_target_followers', async (req, res) => {
+    const count = Number(req.body?.count);
+
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+    if (!Number.isFinite(count) || count < 0) {
+        return res.status(400).json({ error: '无效的 count（必须是 >=0 的数字）' });
+    }
+
+    const timeoutMs = Number(req.body?.timeoutMs || 5000);
+    const timeout = Number.isFinite(timeoutMs) ? Math.max(1000, Math.min(timeoutMs, 20000)) : 5000;
+
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const waiter = {};
+            const timer = setTimeout(() => {
+                _farmingTargetFollowersWaiters = _farmingTargetFollowersWaiters.filter(w => w !== waiter);
+                reject(new Error('timeout'));
+            }, timeout);
+            waiter.resolve = (d) => { clearTimeout(timer); resolve(d); };
+            waiter.reject = (e) => { clearTimeout(timer); reject(e); };
+            _farmingTargetFollowersWaiters.push(waiter);
+            processes.farming.process.stdin.write(JSON.stringify({ type: 'set_target_followers', count }) + '\n');
+        });
+        res.json({ success: true, ...data });
+    } catch (e) {
+        // 超时则回退到最近一次结果（若有）
+        if (_lastFarmingTargetFollowersResult) {
+            return res.json({ success: true, stale: true, ..._lastFarmingTargetFollowersResult });
+        }
+        res.status(504).json({ error: '设置目标人数超时' });
+    }
+});
+
+// ✅ 一体化：设置目标挂机人数（若 farming 未运行则先启动）
+// 用于前端“应用=启动”的交互：一次点击即可启动并应用目标人数
+app.post('/api/farming/apply_target_followers', async (req, res) => {
+    const count = Number(req.body?.count);
+
+    if (!Number.isFinite(count) || count < 0) {
+        return res.status(400).json({ error: '无效的 count（必须是 >=0 的数字）' });
+    }
+
+    let started = false;
+    // 若未运行，先启动 farming
+    if (!processes.farming.process) {
+        const cmd = 'node';
+        const args = ['src/farming.js'];
+        const ok = startProcess('farming', cmd, args, PROJECT_ROOT, 'farming');
+        if (!ok) {
+            return res.status(500).json({ error: '启动挂机车队失败' });
+        }
+        started = true;
+    }
+
+    // 启动后直接发命令（stdin 会缓冲，farming 进程起来后会读取）
+    if (!processes.farming.process || !processes.farming.process.stdin) {
+        return res.status(400).json({ error: '挂机车队未运行' });
+    }
+
+    const timeoutMs = Number(req.body?.timeoutMs || 8000);
+    const timeout = Number.isFinite(timeoutMs) ? Math.max(1000, Math.min(timeoutMs, 20000)) : 8000;
+
+    try {
+        const data = await new Promise((resolve, reject) => {
+            const waiter = {};
+            const timer = setTimeout(() => {
+                _farmingTargetFollowersWaiters = _farmingTargetFollowersWaiters.filter(w => w !== waiter);
+                reject(new Error('timeout'));
+            }, timeout);
+            waiter.resolve = (d) => { clearTimeout(timer); resolve(d); };
+            waiter.reject = (e) => { clearTimeout(timer); reject(e); };
+            _farmingTargetFollowersWaiters.push(waiter);
+            processes.farming.process.stdin.write(JSON.stringify({ type: 'set_target_followers', count }) + '\n');
+        });
+        res.json({ success: true, started, ...data });
+    } catch (e) {
+        if (_lastFarmingTargetFollowersResult) {
+            return res.json({ success: true, started, stale: true, ..._lastFarmingTargetFollowersResult });
+        }
+        res.status(504).json({ error: '设置目标人数超时', started });
     }
 });
 

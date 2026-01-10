@@ -103,9 +103,36 @@
                         <span class="font-medium">挂机车队</span>
                         <span :class="status.farming ? 'bg-green-500' : 'bg-red-500'" class="w-2 h-2 rounded-full"></span>
                     </div>
-                    <div class="flex space-x-2">
-                        <button @click="toggleProcess('farming', 'start')" :disabled="status.farming" class="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">启动</button>
-                        <button @click="toggleProcess('farming', 'stop')" :disabled="!status.farming" class="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs py-1 px-2 rounded transition">停止</button>
+
+                    <!-- 🎯 动态目标挂机人数 -->
+                    <div class="border-t border-gray-600 pt-2 mt-2">
+                        <!-- 第一行：标题 + 状态（左右对齐） -->
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="text-xs text-gray-400">🎯 挂机人数</label>
+                            <div class="text-[10px] text-gray-400">
+                                当前:<span class="text-cyan-300 font-semibold">{{ currentActiveFollowers }}</span>
+                                /
+                                最大:<span class="text-gray-200 font-semibold">{{ maxUsableFollowers }}</span>
+                            </div>
+                        </div>
+                        
+                        <!-- 第二行：输入框 + 按钮（紧凑排列） -->
+                        <div class="flex items-center space-x-1">
+                            <input v-model="targetFollowersInput"
+                                   type="number"
+                                   min="0"
+                                   class="flex-1 min-w-0 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
+                                   placeholder="例如 2000">
+                            <button @click="applyTargetFollowers"
+                                    class="bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-xs py-1 px-2 rounded whitespace-nowrap">
+                                启动/应用
+                            </button>
+                            <button @click="toggleProcess('farming', 'stop')"
+                                    :disabled="!status.farming"
+                                    class="bg-red-700 hover:bg-red-600 disabled:opacity-50 text-xs py-1 px-2 rounded whitespace-nowrap">
+                                停止
+                            </button>
+                        </div>
                     </div>
                     <!-- 🔴 主号启停（可停止/可加回） -->
                     <div class="border-t border-gray-600 pt-2 mt-2">
@@ -486,6 +513,25 @@
                 const selectedFarmingLeader = ref('');
                 const farmingLeadersStatus = ref({}); // username -> { stopped, state, is_gc_connected, ... }
 
+                // 🎯 目标挂机人数
+                const targetFollowersInput = ref('');
+                const currentActiveFollowers = computed(() => {
+                    const fp = farmingProgress.value;
+                    if (!fp) return 0;
+                    return (fp.inLobby || 0) + (fp.assigned || 0) + (fp.poolIdle || 0) + (fp.loggingIn || 0);
+                });
+                const maxUsableFollowers = computed(() => {
+                    // 优先使用 running 时的 total（代表当前已加载可用小号）
+                    if (status.value?.farming && farmingProgress.value?.total) {
+                        return farmingProgress.value.total;
+                    }
+                    // 未运行时：用 Farm 配置列表总人数作为“最多可使用”
+                    if (Array.isArray(farmConfigs.value) && farmConfigs.value.length > 0) {
+                        return farmConfigs.value.reduce((sum, c) => sum + (Number(c.followers) || 0), 0);
+                    }
+                    return 0;
+                });
+
                 // Steam Guard 验证码
                 const steamGuardVisible = ref(false);
                 const steamGuardDomain = ref('');
@@ -771,6 +817,13 @@
                         toolStatus.value = newToolStatus;
                     });
 
+                    // farming 目标人数设置结果回传
+                    socket.on('farmingTargetFollowers', (payload) => {
+                        if (payload && payload.target !== undefined) {
+                            targetFollowersInput.value = String(payload.target);
+                        }
+                    });
+
                     // 获取初始状态
                     fetch('/api/status').then(r => r.json()).then(res => {
                         status.value = { showcase: res.showcase, farming: res.farming };
@@ -813,6 +866,33 @@
                         await fetch(`/api/process/${name}/${action}`, { method: 'POST' });
                     } catch (e) {
                         addLog({ timestamp: '', source: 'System', message: `API Error: ${e.message}`, type: 'error' });
+                    }
+                };
+
+                // 🎯 应用目标挂机人数
+                const applyTargetFollowers = async () => {
+                    const count = Number(targetFollowersInput.value);
+                    if (!Number.isFinite(count) || count < 0) {
+                        alert('请输入 >= 0 的数字');
+                        return;
+                    }
+                    try {
+                        // ✅ 应用即启动：若挂机未运行则由服务端先启动，再下发目标人数
+                        const res = await fetch('/api/farming/apply_target_followers', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ count })
+                        });
+                        const data = await res.json();
+                        if (!res.ok || !data.success) {
+                            alert('设置失败: ' + (data.error || res.status));
+                            return;
+                        }
+                        if (data.target !== undefined) {
+                            targetFollowersInput.value = String(data.target);
+                        }
+                    } catch (e) {
+                        alert('请求失败: ' + e.message);
                     }
                 };
 
@@ -1277,6 +1357,8 @@
                     loadLeaders, verifyLeader,
                     steamGuardVisible, steamGuardDomain, steamGuardCode, 
                     submitSteamGuard, cancelSteamGuard,
+                    // 🎯 目标人数
+                    targetFollowersInput, applyTargetFollowers, currentActiveFollowers, maxUsableFollowers,
                     // 日志页签相关（独立数组）
                     logTabTitle, filteredLogs, clearCurrentLogs, farmingStats,
                     farmingTotalElapsed, farmingTotalFollowers,

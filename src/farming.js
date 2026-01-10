@@ -375,6 +375,47 @@ class FollowerPool {
         logSuccess('Pool', `✅ ${follower.account.username} 已回到池子 (原房间: ${prevLobby || '无'})`);
     }
 
+    // 强制将小号置为 PENDING（不进入 idle 池），用于“缩容/目标人数下降”
+    // 说明：调用方通常会先 bot.cleanup()，这里负责把它从 pool 的各种结构里摘除并可选入队。
+    forceToPending(follower, options = {}) {
+        const { enqueue = true } = options;
+        if (!follower) return;
+
+        try {
+            // 1) 从 idle 池移除
+            if (Array.isArray(this.idle) && this.idle.length > 0) {
+                if (this.idle.includes(follower)) {
+                    this.idle = this.idle.filter(x => x !== follower);
+                }
+            }
+
+            // 2) 从 assigned 映射移除（可能挂在多个 key 的脏引用，直接全表过滤一次）
+            if (this.assigned && typeof this.assigned.forEach === 'function') {
+                const toDelete = [];
+                this.assigned.forEach((arr, lobbyId) => {
+                    if (!Array.isArray(arr) || arr.length === 0) return;
+                    const next = arr.filter(x => x !== follower);
+                    if (next.length === 0) toDelete.push(lobbyId);
+                    else if (next.length !== arr.length) this.assigned.set(lobbyId, next);
+                });
+                toDelete.forEach(id => this.assigned.delete(id));
+            }
+
+            // 3) 清空占位字段
+            follower.currentLobbyId = null;
+            follower.assignedLobbyId = null;
+            follower.assignedAt = 0;
+
+            // 4) 状态改为 PENDING，并可选入队（去重）
+            follower.state = FollowerState.PENDING;
+            if (enqueue && Array.isArray(this.loginQueue)) {
+                if (!this.loginQueue.includes(follower)) {
+                    this.loginQueue.push(follower);
+                }
+            }
+        } catch (e) {}
+    }
+
     // 获取统计信息
     getStats() {
         let inLobbyCount = 0;
@@ -1678,6 +1719,89 @@ class FarmingManager {
 
         // ✅ 僵尸分配清理日志节流
         this._lastPruneAssignedLogAt = 0;
+
+        // ✅ 动态目标挂机人数（“在线/可用小号”目标）：0 表示不限制（保持旧逻辑）
+        this.targetFollowers = 0;
+        this._lastApplyTargetAt = 0; // 缩容节流（避免 10ms tick 下反复全量扫描）
+    }
+
+    // 计算“当前使用人数”（在线/可用）：IDLE + ASSIGNED + IN_LOBBY + LOGGING_IN
+    getActiveFollowerCount() {
+        const poolStats = this.pool.getStats();
+        return (poolStats.idle || 0) + (poolStats.assigned || 0) + (poolStats.inLobby || 0) + (poolStats.loggingIn || 0);
+    }
+
+    // 设置目标挂机人数（可运行时动态调整）
+    setTargetFollowers(count) {
+        const maxUsable = this.pool?.all?.length || 0;
+        let target = Number(count);
+        if (!Number.isFinite(target)) target = 0;
+        target = Math.max(0, Math.floor(target));
+        if (maxUsable > 0) target = Math.min(target, maxUsable);
+
+        this.targetFollowers = target;
+        const result = this.applyTargetFollowers();
+        return { success: true, target: this.targetFollowers, maxUsable, ...result };
+    }
+
+    // 目标人数下降时：缩容登出多余小号（优先 idle，其次房间内/登录中）
+    applyTargetFollowers() {
+        const target = Number(this.targetFollowers || 0);
+        if (!target || target <= 0) {
+            return { changed: false, reason: 'no_limit' };
+        }
+
+        const poolStats = this.pool.getStats();
+        const active = this.getActiveFollowerCount();
+        let excess = active - target;
+        if (excess <= 0) {
+            return { changed: false, active, target };
+        }
+
+        let stopped = 0;
+
+        // 1) 优先踢 idle（对房间影响最小）
+        while (excess > 0 && Array.isArray(this.pool.idle) && this.pool.idle.length > 0) {
+            const bot = this.pool.idle.pop();
+            if (!bot || bot.permanentFailed || bot.removing) continue;
+            try { bot.cleanup(); } catch (e) {}
+            this.pool.forceToPending(bot, { enqueue: true });
+            excess--;
+            stopped++;
+        }
+
+        // 2) 其次踢在房间内的小号（会影响房间人数，但符合“缩容”预期）
+        if (excess > 0 && Array.isArray(this.allFollowers)) {
+            const inLobbyBots = this.allFollowers.filter(b => b && !b.permanentFailed && !b.removing && b.state === FollowerState.IN_LOBBY);
+            for (const bot of inLobbyBots) {
+                if (excess <= 0) break;
+                try { bot.cleanup(); } catch (e) {}
+                this.pool.forceToPending(bot, { enqueue: true });
+                excess--;
+                stopped++;
+            }
+        }
+
+        // 3) 再踢正在登录/加入中的（避免占并发/占坑）
+        if (excess > 0 && Array.isArray(this.allFollowers)) {
+            const midBots = this.allFollowers.filter(b =>
+                b && !b.permanentFailed && !b.removing &&
+                (b.state === FollowerState.LOGGING_IN || b.state === FollowerState.ASSIGNED)
+            );
+            for (const bot of midBots) {
+                if (excess <= 0) break;
+                try { bot.cleanup(); } catch (e) {}
+                this.pool.forceToPending(bot, { enqueue: true });
+                excess--;
+                stopped++;
+            }
+        }
+
+        if (stopped > 0) {
+            logInfo('Farming', `🎯 目标人数=${target}，缩容登出 ${stopped} 个小号（当前active=${active}）`);
+        }
+
+        return { changed: stopped > 0, stopped, active, target };
     }
 
     // ✅ 清理 assigned 映射里长期卡住/状态错乱的小号引用，避免误判“房间已满”导致登录流水线停摆
@@ -2223,11 +2347,27 @@ class FarmingManager {
             // ✅ 保证流水线不会被偶发异常打断（否则会表现为"还有几千号没登但程序像暂停"）
             try {
                 const poolStats = this.pool.getStats();
+
+                // ✅ 缩容节流：只有 active > target 且至少间隔 2 秒才执行一次（避免 10ms tick 下 O(n) 扫描）
+                const target = Number(this.targetFollowers || 0);
+                const active = (poolStats.idle || 0) + (poolStats.assigned || 0) + (poolStats.inLobby || 0) + (poolStats.loggingIn || 0);
+                if (target > 0 && active > target) {
+                    const now = Date.now();
+                    if (!this._lastApplyTargetAt || (now - this._lastApplyTargetAt) >= 2000) {
+                        this._lastApplyTargetAt = now;
+                        try { this.applyTargetFollowers(); } catch (e) {}
+                    }
+                }
                 
                 // ✅ 核心改动：只看池子缺口，缺口 <= 0 则暂缓登录
                 const demand = this._calcPoolDemand();
                 const currentIdle = poolStats.idle;
-                const gap = demand - currentIdle; // 缺口 = 需求 - 当前空闲
+                const demandGap = demand - currentIdle; // 缺口 = 需求 - 当前空闲
+
+                // ✅ 新增：目标挂机人数约束（active>=target 时暂停登录）
+                const activeGap = target > 0 ? (target - active) : Number.POSITIVE_INFINITY;
+
+                const gap = Math.min(demandGap, activeGap);
                 
                 if (gap <= 0) {
                     // 池子够用，不需要登录，1秒后再检查
@@ -2304,6 +2444,10 @@ class FarmingManager {
             
             // 配置状态
             loadedConfigs: Array.from(this.loadedConfigs),
+
+            // 目标/使用人数（用于 UI 显示）
+            targetFollowers: this.targetFollowers || 0,
+            activeFollowers: this.getActiveFollowerCount(),
             
             // 时间
             totalElapsed
@@ -2701,6 +2845,15 @@ process.stdin.on('data', (data) => {
         if (cmd.type === 'get_stats') {
             const stats = manager.getStats();
             console.log(JSON.stringify({ type: 'stats', data: stats }));
+            return;
+        }
+
+        // ✅ 新增：设置目标挂机人数（动态调整小号在线/可用人数）
+        if (cmd.type === 'set_target_followers') {
+            const count = Number(cmd.count || 0);
+            const result = manager.setTargetFollowers(count);
+            logInfo('System', `🎯 设置目标挂机人数: ${result.target} / max=${result.maxUsable} (changed=${result.changed ? 'yes' : 'no'})`);
+            console.log(JSON.stringify({ type: 'set_target_followers_result', ...result }));
             return;
         }
     } catch (e) {
