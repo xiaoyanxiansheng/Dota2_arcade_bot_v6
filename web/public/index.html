@@ -888,6 +888,12 @@
                             alert('设置失败: ' + (data.error || res.status));
                             return;
                         }
+                        // pending 场景：服务端已接收并写入 stdin，最终结果会通过 socket 回传，这里先不弹窗
+                        if (data.pending) {
+                            // 先把输入框保持为用户期望值，避免误解“没生效”
+                            targetFollowersInput.value = String(count);
+                            return;
+                        }
                         if (data.target !== undefined) {
                             targetFollowersInput.value = String(data.target);
                         }

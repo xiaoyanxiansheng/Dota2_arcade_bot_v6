@@ -2756,119 +2756,137 @@ process.on('SIGINT', () => {
 
 // 监听 stdin 的命令（用于 Web 控制台）
 process.stdin.setEncoding('utf8');
-process.stdin.on('data', (data) => {
-    const input = data.toString().trim();
-    
-    // 尝试解析 JSON 命令
-    try {
-        const cmd = JSON.parse(input);
-        
-        // 解散房间命令
-        if (cmd.type === 'dissolve_rooms' && cmd.roomIds) {
-            logSection('收到解散房间命令');
-            logInfo('System', `需要解散的房间: ${cmd.roomIds.length} 个`);
-            cmd.roomIds.forEach((id, idx) => {
-                logInfo('System', `   ${idx + 1}. LobbyId: ${id}`);
-            });
-            manager.dissolveRooms(cmd.roomIds);
-            return;
-        }
+// 注意：stdin 的 'data' 事件可能一次带多行（甚至半行）命令。
+// 之前直接 trim + JSON.parse 会在命令并包时解析失败，导致 Web 侧等待超时。
+let _stdinBuf = '';
+process.stdin.on('data', (chunk) => {
+    _stdinBuf += chunk.toString();
 
-        // 自动结算命令（由挂机车队选择“可解散且无陌生人”的房间）
-        if (cmd.type === 'settle_rooms') {
-            const count = Number(cmd.count || 1);
-            const excludeRoomIds = Array.isArray(cmd.excludeRoomIds) ? cmd.excludeRoomIds : [];
-            logSection('收到自动结算命令');
-            logInfo('System', `请求结算: count=${count} exclude=${excludeRoomIds.length}`);
-            manager.settleRooms(count, excludeRoomIds);
-            return;
-        }
-        
-        // 添加配置到池子命令
-        if (cmd.type === 'add_config' && cmd.configName) {
-            logSection('收到添加配置命令');
-            logInfo('System', `配置名称: ${cmd.configName}`);
-            const result = manager.addConfig(cmd.configName);
-            console.log(JSON.stringify({ type: 'add_config_result', ...result }));
-            return;
-        }
+    // 按行处理（只处理完整的一行；最后一段留在 buffer 里等待下一次 data）
+    while (true) {
+        const idx = _stdinBuf.indexOf('\n');
+        if (idx < 0) break;
+        const rawLine = _stdinBuf.slice(0, idx);
+        _stdinBuf = _stdinBuf.slice(idx + 1);
 
-        // ✅ 新增：查询当前已加载配置（给 Web 控制台显示“已加入/未加入”使用）
-        if (cmd.type === 'get_loaded_configs') {
-            try {
-                const list = Array.from(manager.loadedConfigs || []);
-                console.log(JSON.stringify({ type: 'loaded_configs', data: list }));
-            } catch (e) {
-                console.log(JSON.stringify({ type: 'loaded_configs', data: [] }));
+        const input = String(rawLine || '').trim();
+        if (!input) continue;
+
+        // 尝试解析 JSON 命令（逐行）
+        try {
+            const cmd = JSON.parse(input);
+
+            // 解散房间命令
+            if (cmd.type === 'dissolve_rooms' && cmd.roomIds) {
+                logSection('收到解散房间命令');
+                logInfo('System', `需要解散的房间: ${cmd.roomIds.length} 个`);
+                cmd.roomIds.forEach((id, idx2) => {
+                    logInfo('System', `   ${idx2 + 1}. LobbyId: ${id}`);
+                });
+                manager.dissolveRooms(cmd.roomIds);
+                continue;
             }
-            return;
+
+            // 自动结算命令（由挂机车队选择“可解散且无陌生人”的房间）
+            if (cmd.type === 'settle_rooms') {
+                const count = Number(cmd.count || 1);
+                const excludeRoomIds = Array.isArray(cmd.excludeRoomIds) ? cmd.excludeRoomIds : [];
+                logSection('收到自动结算命令');
+                logInfo('System', `请求结算: count=${count} exclude=${excludeRoomIds.length}`);
+                manager.settleRooms(count, excludeRoomIds);
+                continue;
+            }
+
+            // 添加配置到池子命令
+            if (cmd.type === 'add_config' && cmd.configName) {
+                logSection('收到添加配置命令');
+                logInfo('System', `配置名称: ${cmd.configName}`);
+                const result = manager.addConfig(cmd.configName);
+                console.log(JSON.stringify({ type: 'add_config_result', ...result }));
+                continue;
+            }
+
+            // ✅ 新增：查询当前已加载配置（给 Web 控制台显示“已加入/未加入”使用）
+            if (cmd.type === 'get_loaded_configs') {
+                try {
+                    const list = Array.from(manager.loadedConfigs || []);
+                    console.log(JSON.stringify({ type: 'loaded_configs', data: list }));
+                } catch (e) {
+                    console.log(JSON.stringify({ type: 'loaded_configs', data: [] }));
+                }
+                continue;
+            }
+
+            // 🔴 新增：移除配置（退出房间→退出登录→退出池子）
+            if (cmd.type === 'remove_config' && cmd.configName) {
+                logSection('收到移除配置命令');
+                logInfo('System', `配置名称: ${cmd.configName}`);
+                const result = manager.removeConfig(cmd.configName);
+                console.log(JSON.stringify({ type: 'remove_config_result', ...result }));
+                continue;
+            }
+
+            // 🔴 新增：停止指定挂机主号（释放账号）
+            if (cmd.type === 'stop_leader') {
+                const result = manager.stopLeader({
+                    username: cmd.username,
+                    index: cmd.index,
+                    mode: cmd.mode
+                });
+                console.log(JSON.stringify({ type: 'stop_leader_result', ...result }));
+                continue;
+            }
+
+            // 🔴 新增：启动指定挂机主号（加回流程）
+            if (cmd.type === 'start_leader') {
+                const result = manager.startLeader({
+                    username: cmd.username,
+                    index: cmd.index
+                });
+                console.log(JSON.stringify({ type: 'start_leader_result', ...result }));
+                continue;
+            }
+
+            // 🔴 新增：获取主号状态（用于前端显示）
+            if (cmd.type === 'get_leaders_status') {
+                const data = manager.getLeadersStatus();
+                console.log(JSON.stringify({ type: 'leaders_status', data }));
+                continue;
+            }
+
+            // 获取状态命令
+            if (cmd.type === 'get_stats') {
+                const stats = manager.getStats();
+                console.log(JSON.stringify({ type: 'stats', data: stats }));
+                continue;
+            }
+
+            // ✅ 新增：设置目标挂机人数（动态调整小号在线/可用人数）
+            if (cmd.type === 'set_target_followers') {
+                const count = Number(cmd.count || 0);
+                const result = manager.setTargetFollowers(count);
+                logInfo('System', `🎯 设置目标挂机人数: ${result.target} / max=${result.maxUsable} (changed=${result.changed ? 'yes' : 'no'})`);
+                console.log(JSON.stringify({ type: 'set_target_followers_result', ...result }));
+                continue;
+            }
+
+            // 未识别 JSON 命令：忽略
+            continue;
+        } catch (e) {
+            // 不是 JSON：当作普通命令处理
         }
 
-        // 🔴 新增：移除配置（退出房间→退出登录→退出池子）
-        if (cmd.type === 'remove_config' && cmd.configName) {
-            logSection('收到移除配置命令');
-            logInfo('System', `配置名称: ${cmd.configName}`);
-            const result = manager.removeConfig(cmd.configName);
-            console.log(JSON.stringify({ type: 'remove_config_result', ...result }));
-            return;
+        // 普通退出命令
+        const cmdLower = input.toLowerCase();
+        if (cmdLower === 'exit' || cmdLower === 'stop' || cmdLower === 'quit') {
+            logSection('收到退出命令');
+            manager.cleanup();
+            setTimeout(() => {
+                logSuccess('System', '程序已安全退出');
+                process.exit(0);
+            }, 3000);
+            continue;
         }
-
-        // 🔴 新增：停止指定挂机主号（释放账号）
-        if (cmd.type === 'stop_leader') {
-            const result = manager.stopLeader({
-                username: cmd.username,
-                index: cmd.index,
-                mode: cmd.mode
-            });
-            console.log(JSON.stringify({ type: 'stop_leader_result', ...result }));
-            return;
-        }
-
-        // 🔴 新增：启动指定挂机主号（加回流程）
-        if (cmd.type === 'start_leader') {
-            const result = manager.startLeader({
-                username: cmd.username,
-                index: cmd.index
-            });
-            console.log(JSON.stringify({ type: 'start_leader_result', ...result }));
-            return;
-        }
-
-        // 🔴 新增：获取主号状态（用于前端显示）
-        if (cmd.type === 'get_leaders_status') {
-            const data = manager.getLeadersStatus();
-            console.log(JSON.stringify({ type: 'leaders_status', data }));
-            return;
-        }
-        
-        // 获取状态命令
-        if (cmd.type === 'get_stats') {
-            const stats = manager.getStats();
-            console.log(JSON.stringify({ type: 'stats', data: stats }));
-            return;
-        }
-
-        // ✅ 新增：设置目标挂机人数（动态调整小号在线/可用人数）
-        if (cmd.type === 'set_target_followers') {
-            const count = Number(cmd.count || 0);
-            const result = manager.setTargetFollowers(count);
-            logInfo('System', `🎯 设置目标挂机人数: ${result.target} / max=${result.maxUsable} (changed=${result.changed ? 'yes' : 'no'})`);
-            console.log(JSON.stringify({ type: 'set_target_followers_result', ...result }));
-            return;
-        }
-    } catch (e) {
-        // 不是 JSON，检查是否是退出命令
-    }
-    
-    // 普通退出命令
-    const cmdLower = input.toLowerCase();
-    if (cmdLower === 'exit' || cmdLower === 'stop' || cmdLower === 'quit') {
-        logSection('收到退出命令');
-        manager.cleanup();
-        setTimeout(() => {
-            logSuccess('System', '程序已安全退出');
-            process.exit(0);
-        }, 3000);
     }
 });
 

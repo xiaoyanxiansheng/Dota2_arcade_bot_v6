@@ -498,7 +498,8 @@ app.post('/api/farming/apply_target_followers', async (req, res) => {
         return res.status(400).json({ error: '挂机车队未运行' });
     }
 
-    const timeoutMs = Number(req.body?.timeoutMs || 8000);
+    // ✅ 刚启动 farming 时，初始化/加载配置可能更慢；默认给更长等待时间，减少误报超时
+    const timeoutMs = Number(req.body?.timeoutMs || (started ? 20000 : 8000));
     const timeout = Number.isFinite(timeoutMs) ? Math.max(1000, Math.min(timeoutMs, 20000)) : 8000;
 
     try {
@@ -517,6 +518,11 @@ app.post('/api/farming/apply_target_followers', async (req, res) => {
     } catch (e) {
         if (_lastFarmingTargetFollowersResult) {
             return res.json({ success: true, started, stale: true, ..._lastFarmingTargetFollowersResult });
+        }
+        // ✅ 若是“启动即应用”场景：即使未等到回包，也很可能命令已写入 stdin 缓冲，稍后会生效。
+        // 这里返回 pending=true，避免前端弹窗误导；最终结果会通过 socket.io 的 farmingTargetFollowers 回传。
+        if (started) {
+            return res.json({ success: true, started, pending: true, requested: count });
         }
         res.status(504).json({ error: '设置目标人数超时', started });
     }
