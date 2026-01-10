@@ -294,6 +294,16 @@ class FollowerPool {
             } catch (e) {}
             return;
         }
+
+        // ✅ 小号统一重试策略：若处于 nextRetryAt 冷却期，不进入 idle 池，直接回到登录队列等待到点再试
+        // 目的：避免“加入失败/超时后立即回池又被马上分配”，导致持续抖动刷重试
+        if (follower && follower.nextRetryAt && Date.now() < follower.nextRetryAt) {
+            follower.state = FollowerState.PENDING;
+            if (!this.loginQueue.includes(follower)) {
+                this.loginQueue.push(follower);
+            }
+            return;
+        }
         if (!this.idle.includes(follower)) {
             this.idle.push(follower);
             follower.state = FollowerState.IDLE;
@@ -419,8 +429,6 @@ class FollowerBot {
         this.currentLobbyId = null;
         this.assignedLobbyId = null;
         this.assignedAt = 0; // ✅ 分配时间戳（用于清理“僵尸分配”）
-        this.retryCount = 0;
-        this.maxRetries = 5;
         this.ready_up_heartbeat = null;
         this.loginTimeoutHandle = null;  // 登录超时定时器
         this.joinTimeoutHandle = null;   // 加入房间超时定时器
@@ -428,16 +436,10 @@ class FollowerBot {
         // 永久失败（例如 InvalidPassword）：只记录一次并从系统中剔除
         this.permanentFailed = false;
         this._invalidPasswordNotified = false;
-
-        // ✅ 新增：反复失败冷却（不改变原逻辑，只是降低"无限刷重试"带来的资源占用）
-        this.consecutiveLoginFailures = 0; // 连续登录失败次数（超时/网络/429 等）
-        this.nextRetryAt = 0;              // 下次允许重试的时间戳(ms)，到点前跳过
-        this._cooldownNotifiedAt = 0;      // 冷却日志节流
-        this._loggedInElsewhereNotified = false;
-
-        // ✅ 新增：异常计数（独立于冷却，用于"超过N次永久禁用"）
-        this.exceptionCount = 0;           // 异常累计次数（登录超时/代理超时/429等）
-        this._exceptionBanNotified = false;
+        
+        // ✅ 小号统一重试策略：除 InvalidPassword 外，任何失败都在 10 分钟后再重试（无限重试）
+        this.FOLLOWER_RETRY_DELAY_MS = 10 * 60 * 1000;
+        this.nextRetryAt = 0; // 下次允许重试的时间戳(ms)，到点前跳过
 
         // CRC 数据
         this.knownCrc = "1396649696593898392";
@@ -458,7 +460,9 @@ class FollowerBot {
         // 冷却期间不允许启动（由登录流水线跳过；这里再兜底一次）
         if (this.nextRetryAt && Date.now() < this.nextRetryAt) {
             this.state = FollowerState.PENDING;
-            this.pool.loginQueue.push(this);
+            if (!this.pool.loginQueue.includes(this)) {
+                this.pool.loginQueue.push(this);
+            }
             return;
         }
         this.state = FollowerState.LOGGING_IN;
@@ -480,39 +484,13 @@ class FollowerBot {
         this.loginTimeoutHandle = setTimeout(() => {
             if (this.state === FollowerState.LOGGING_IN && !this.is_gc_connected) {
                 const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
-                logWarning('Follower', `⏱️ ${this.account.username} 登录超时(30s) [${proxyIp}] → 放回队列`);
-                
-                // ✅ 异常计数 + 永久禁用（超过3次直接剔除，不再10分钟后重试）
-                this.exceptionCount = (this.exceptionCount || 0) + 1;
-                const banThreshold = this.settings?.exception_ban_threshold || 3;
-                if (this.exceptionCount > banThreshold) {
-                    if (!this._exceptionBanNotified) {
-                        this._exceptionBanNotified = true;
-                        logWarning('Follower', `🚫 ${this.account.username} 异常累计${this.exceptionCount}次(>${banThreshold}) [${proxyIp}] → 永久禁用`);
-                    }
-                    this.permanentFailed = true;
-                    this.cleanup();
-                    try { this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.exception_ban_timeout' }); } catch (e) {}
-                    return;
-                }
-                
-                // 超时，清理并放回队列
-                this.consecutiveLoginFailures = (this.consecutiveLoginFailures || 0) + 1;
-                // 连续失败达到阈值后进入冷却，减少无限刷重试占用资源
-                const failThreshold = this.settings?.follower_cooldown_fail_threshold || 3;
-                const cooldownMs = this.settings?.follower_cooldown_ms || (10 * 60 * 1000);
-                if (this.consecutiveLoginFailures >= failThreshold) {
-                    this.nextRetryAt = Date.now() + cooldownMs;
-                    // 日志节流：最多每分钟提示一次
-                    const now = Date.now();
-                    if (!this._cooldownNotifiedAt || (now - this._cooldownNotifiedAt) > 60000) {
-                        this._cooldownNotifiedAt = now;
-                        logWarning('Follower', `🧊 ${this.account.username} 连续失败${this.consecutiveLoginFailures}次，冷却${Math.ceil(cooldownMs/60000)}分钟后再试`);
-                    }
-                }
+                this.nextRetryAt = Date.now() + this.FOLLOWER_RETRY_DELAY_MS;
+                logWarning('Follower', `⏱️ ${this.account.username} 登录超时(30s) [${proxyIp}] → ${Math.ceil(this.FOLLOWER_RETRY_DELAY_MS / 60000)}分钟后重试`);
                 this.cleanup();
                 this.state = FollowerState.PENDING;
-                this.pool.loginQueue.push(this);
+                if (!this.pool.loginQueue.includes(this)) {
+                    this.pool.loginQueue.push(this);
+                }
             }
         }, this.LOGIN_TIMEOUT);
         
@@ -549,16 +527,17 @@ class FollowerBot {
                 callback(code);
             } else {
                 // 没有 shared_secret，无法自动验证，放回队列
+                this.nextRetryAt = Date.now() + this.FOLLOWER_RETRY_DELAY_MS;
                 this.cleanup();
                 this.state = FollowerState.PENDING;
-                this.pool.loginQueue.push(this);
+                if (!this.pool.loginQueue.includes(this)) {
+                    this.pool.loginQueue.push(this);
+                }
             }
         });
 
         this.client.on('loggedOn', () => {
             if (!this.client) return;  // 🔴 防止超时清理后延迟触发
-            this.retryCount = 0;
-            this.loggedInElsewhereRetry = 0;  // 登录成功，重置计数器
             this.client.setPersona(SteamUser.EPersonaState.Online);
             this.client.gamesPlayed([this.settings.target_app_id]);
         });
@@ -601,51 +580,34 @@ class FollowerBot {
 
     handleError(err) {
         const errorMessage = err.message || err.toString();
+        const prevState = this.state;
+        const wasIdle = Array.isArray(this.pool?.idle) && this.pool.idle.includes(this);
+        const shouldReleaseAssignment = !!this.assignedLobbyId || prevState === FollowerState.ASSIGNED || prevState === FollowerState.IN_LOBBY;
         
         // LoggedInElsewhere: 账号已在别处登录（可能是之前的请求延迟成功了）
-        // ✅ 改为纳入异常计数体系，超过阈值永久禁用
         if (errorMessage.includes('LoggedInElsewhere') || errorMessage.includes('AlreadyLoggedInElsewhere')) {
-            this.exceptionCount = (this.exceptionCount || 0) + 1;
-            const banThreshold = this.settings?.exception_ban_threshold || 3;
             const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
-            
-            // ✅ 超过阈值：永久禁用
-            if (this.exceptionCount > banThreshold) {
-                if (!this._exceptionBanNotified) {
-                    this._exceptionBanNotified = true;
-                    logWarning('Follower', `🚫 ${this.account.username} 已在别处登录，异常累计${this.exceptionCount}次(>${banThreshold}) [${proxyIp}] → 永久禁用`);
+
+            this.nextRetryAt = Date.now() + this.FOLLOWER_RETRY_DELAY_MS;
+            logWarning('Follower', `🚪 ${this.account.username} 账号已在别处登录 [${proxyIp}] → ${Math.ceil(this.FOLLOWER_RETRY_DELAY_MS / 60000)}分钟后重试`);
+            this.cleanup();
+
+            // ✅ 若正在加入/已在房间：直接回池释放分配（避免长期占用 ASSIGNED/房间缺人）
+            if (shouldReleaseAssignment) {
+                this.pool.returnToPool(this);
+            } else {
+                // ✅ 若在 idle 池：先从 idle 移除再入队，避免“既在池子又在队列”
+                if (wasIdle) {
+                    this.pool.idle = this.pool.idle.filter(x => x !== this);
                 }
-                this.permanentFailed = true;
-                try { this.cleanup(); } catch (e) {}
-                try { this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.logged_in_elsewhere_ban' }); } catch (e) {}
-                return;
-            }
-            
-            // 只在第一次和每 3 次打印日志，避免刷屏
-            if (this.exceptionCount === 1 || this.exceptionCount % 3 === 0) {
-                logWarning('Follower', `${this.account.username} 账号已在别处登录(${this.exceptionCount}/${banThreshold}) → 重建连接`);
-            }
-            
-            // 1. 销毁旧 client
-            if (this.client) {
-                try { this.client.removeAllListeners(); } catch (e) {}
-                this.client = null;
-            }
-            this.is_gc_connected = false;
-            this.state = FollowerState.PENDING;
-            
-            // 2. 等待 3 秒后重新开始登录
-            setTimeout(() => {
-                if (!this.stopped && !this.permanentFailed) {
-                    this.start();
+                this.state = FollowerState.PENDING;
+                if (!this.pool.loginQueue.includes(this)) {
+                    this.pool.loginQueue.push(this);
                 }
-            }, 3000);
+            }
             
             return;
         }
-        
-        // 重置 LoggedInElsewhere 计数器（其他错误说明连接状态已改变）
-        this.loggedInElsewhereRetry = 0;
         
         // 清除登录超时定时器
         this.clearLoginTimeout();
@@ -674,36 +636,9 @@ class FollowerBot {
         const isProxyTimeout = errorMessage.includes('timed out') || errorMessage.includes('ETIMEDOUT') || errorMessage.includes('Proxy connection timed out');
         const isConnectionError = ['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(errorCode);
         const is429 = errorMessage.includes('429') || errorMessage.includes('RateLimitExceeded') || errorMessage.includes('Too Many Requests');
-        
-        // ✅ 异常类错误（代理超时/429/连接错误）计入异常计数，超过阈值永久禁用
-        const isExceptionError = isProxyTimeout || is429 || isConnectionError;
-        if (isExceptionError) {
-            this.exceptionCount = (this.exceptionCount || 0) + 1;
-            const banThreshold = this.settings?.exception_ban_threshold || 3;
-            if (this.exceptionCount > banThreshold) {
-                if (!this._exceptionBanNotified) {
-                    this._exceptionBanNotified = true;
-                    logWarning('Follower', `🚫 ${this.account.username} 异常累计${this.exceptionCount}次(>${banThreshold}) [${proxyIp}] → 永久禁用`);
-                }
-                this.permanentFailed = true;
-                this.cleanup();
-                try { this.manager?.finalizeFollowerRemoval?.(this, { from: 'follower.exception_ban_error' }); } catch (e) {}
-                return;
-            }
-        }
-        
-        // ✅ 连续失败计入冷却（保留原有逻辑，但异常类已被上面拦截，这里主要处理其他错误）
-        this.consecutiveLoginFailures = (this.consecutiveLoginFailures || 0) + 1;
-        const failThreshold = this.settings?.follower_cooldown_fail_threshold || 3;
-        const cooldownMs = this.settings?.follower_cooldown_ms || (10 * 60 * 1000);
-        if (this.consecutiveLoginFailures >= failThreshold) {
-            this.nextRetryAt = Date.now() + cooldownMs;
-            const now = Date.now();
-            if (!this._cooldownNotifiedAt || (now - this._cooldownNotifiedAt) > 60000) {
-                this._cooldownNotifiedAt = now;
-                logWarning('Follower', `🧊 ${this.account.username} 连续失败${this.consecutiveLoginFailures}次 [${proxyIp}]，冷却${Math.ceil(cooldownMs/60000)}分钟后再试`);
-            }
-        }
+
+        // ✅ 统一：除 InvalidPassword 外，任何错误都 10 分钟后再重试（无限重试）
+        this.nextRetryAt = Date.now() + this.FOLLOWER_RETRY_DELAY_MS;
         
         if (this.proxy && isProxyTimeout) {
             this.manager.recordProxyFailure(this.proxy);
@@ -711,21 +646,34 @@ class FollowerBot {
         
         // 打印详细错误信息（区分错误类型）
         if (isProxyTimeout) {
-            logWarning('Follower', `🔌 ${this.account.username} 代理超时 [${proxyIp}] code=${errorCode} → 放回队列`);
+            logWarning('Follower', `🔌 ${this.account.username} 代理超时 [${proxyIp}] code=${errorCode} → ${Math.ceil(this.FOLLOWER_RETRY_DELAY_MS / 60000)}分钟后重试`);
         } else if (is429) {
-            logWarning('Follower', `🚦 ${this.account.username} 限流429 [${proxyIp}] code=${errorCode} → 放回队列`);
+            logWarning('Follower', `🚦 ${this.account.username} 限流429 [${proxyIp}] code=${errorCode} → ${Math.ceil(this.FOLLOWER_RETRY_DELAY_MS / 60000)}分钟后重试`);
         } else if (isConnectionError) {
-            logWarning('Follower', `🔗 ${this.account.username} 连接错误 [${proxyIp}] code=${errorCode} → 放回队列`);
+            logWarning('Follower', `🔗 ${this.account.username} 连接错误 [${proxyIp}] code=${errorCode} → ${Math.ceil(this.FOLLOWER_RETRY_DELAY_MS / 60000)}分钟后重试`);
         } else {
-            logWarning('Follower', `❌ ${this.account.username} 登录失败 [${proxyIp}] code=${errorCode} msg=${errorMessage} → 放回队列`);
+            logWarning('Follower', `❌ ${this.account.username} 登录失败 [${proxyIp}] code=${errorCode} msg=${errorMessage} → ${Math.ceil(this.FOLLOWER_RETRY_DELAY_MS / 60000)}分钟后重试`);
         }
         
         // 失败后：清理并放回登录队列末尾
         this.cleanup();
+
+        // ✅ 若正在加入/已在房间：直接回池释放分配（避免长期占用 ASSIGNED/房间缺人）
+        if (shouldReleaseAssignment) {
+            this.pool.returnToPool(this);
+            return;
+        }
+
+        // ✅ 若在 idle 池：先从 idle 移除再入队，避免“既在池子又在队列”
+        if (wasIdle) {
+            this.pool.idle = this.pool.idle.filter(x => x !== this);
+        }
+
         this.state = FollowerState.PENDING;
-        
         // 放回登录队列末尾，等待下次轮到
-        this.pool.loginQueue.push(this);
+        if (!this.pool.loginQueue.includes(this)) {
+            this.pool.loginQueue.push(this);
+        }
     }
 
     handleGCMessage(appid, msgType, payload) {
@@ -736,10 +684,8 @@ class FollowerBot {
             if (!this.is_gc_connected) {
                 this.is_gc_connected = true;
                 this.clearLoginTimeout();  // 登录成功，清除超时定时器
-                // ✅ 登录成功：清空连续失败/冷却
-                this.consecutiveLoginFailures = 0;
+                // ✅ 登录成功：清空下次重试限制
                 this.nextRetryAt = 0;
-                this._cooldownNotifiedAt = 0;
                 
                 // 记录代理成功
                 if (this.proxy) {
@@ -848,7 +794,10 @@ class FollowerBot {
             if (this.state === FollowerState.ASSIGNED) {
                 // 超时，回到池子
                 const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
-                logWarning('Follower', `⏱️ ${this.account.username} 加入房间超时(30s) [${proxyIp}] lobbyId=${this.assignedLobbyId} → 回到池子`);
+                this.nextRetryAt = Date.now() + this.FOLLOWER_RETRY_DELAY_MS;
+                logWarning('Follower', `⏱️ ${this.account.username} 加入房间超时(30s) [${proxyIp}] lobbyId=${this.assignedLobbyId} → ${Math.ceil(this.FOLLOWER_RETRY_DELAY_MS / 60000)}分钟后重试`);
+                // 断开本次连接，避免残留
+                try { this.cleanup(); } catch (e) {}
                 this.pool.returnToPool(this);
             }
         }, this.JOIN_TIMEOUT);
@@ -889,7 +838,6 @@ class FollowerBot {
         // 加入成功（状态3 → 状态4）
         const prevState = this.state;
         this.state = FollowerState.IN_LOBBY;
-        this.retryCount = 0;
         
         if (prevState === FollowerState.ASSIGNED) {
             logSuccess('Follower', `${this.account.username} 进入房间 ${this.assignedLobbyId}`);
@@ -929,140 +877,12 @@ class FollowerBot {
             return;
         }
 
-        // 其他错误（网络问题等）→ 换IP继续尝试加入同一个房间
-        this.retryCount++;
-        logWarning('Follower', `${this.account.username} 加入失败: ${reason} → 换IP重试 (${this.retryCount})`);
-        // 断开重连换IP，继续尝试加入同一个房间
-        this.reconnectWithNewProxy();
-    }
-
-    reconnectWithNewProxy() {
-        // 保留 assignedLobbyId，重连后继续加入同一个房间
-        const savedLobbyId = this.assignedLobbyId;
-        const savedState = this.state;
-        
-        this.cleanupForReconnect(); // 只断开连接，不清除分配信息
-        this.proxy = this.selectRandomProxy();
-        
-        // 恢复分配信息
-        this.assignedLobbyId = savedLobbyId;
-        this.state = FollowerState.ASSIGNED; // 保持状态3
-        
-        setTimeout(() => this.startForReconnect(), 2000);
-    }
-    
-    // 重连专用清理（不清除分配信息）
-    cleanupForReconnect() {
-        if (this.ready_up_heartbeat) {
-            clearInterval(this.ready_up_heartbeat);
-            this.ready_up_heartbeat = null;
-        }
-        this.is_gc_connected = false;
-        
-        try {
-            if (this.client) {
-                this.client.logOff();
-            }
-        } catch (err) {}
-    }
-    
-    // 重连专用启动（GC连接后直接尝试加入房间）
-    startForReconnect() {
-        this.proxy = this.selectRandomProxy();
-        
-        const sharedDataPath = this.settings.shared_steam_data_path || "../shared_steam_data";
-        const steamDataDir = path.resolve(projectRoot, sharedDataPath);
-        
-        const steamOptions = { dataDirectory: steamDataDir };
-        if (this.proxy) {
-            steamOptions.httpProxy = this.proxy;
-        }
-
-        this.client = new SteamUser(steamOptions);
-        this.setupReconnectListeners(); // 使用重连专用监听器
-        
-        const logOnOptions = {
-            accountName: this.account.username,
-            password: this.account.password,
-            promptSteamGuardCode: false,
-            rememberPassword: true,
-            logonID: Math.floor(Math.random() * 1000000)
-        };
-        
-        if (this.account.shared_secret && this.account.shared_secret.length > 5) {
-            try { 
-                logOnOptions.twoFactorCode = SteamTotp.generateAuthCode(this.account.shared_secret); 
-            } catch (err) {}
-        }
-        
-        this.client.logOn(logOnOptions);
-    }
-    
-    // 重连专用监听器（GC连接后直接加入房间，不进池子）
-    setupReconnectListeners() {
-        this.client.on('loggedOn', () => {
-            if (!this.client) return;  // 🔴 防止清理后延迟触发
-            this.client.setPersona(SteamUser.EPersonaState.Online);
-            this.client.gamesPlayed([this.settings.target_app_id]);
-        });
-
-        this.client.on('appLaunched', (appid) => {
-            if (!this.client) return;  // 🔴 防止清理后延迟触发
-            if (appid === this.settings.target_app_id) {
-                setTimeout(() => this.connectGCForReconnect(), 1000);
-            }
-        });
-
-        this.client.on('error', (err) => {
-            // 重连失败，继续重试
-            const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
-            const errorCode = err.code || 'NO_CODE';
-            const errorMessage = err.message || String(err);
-            logWarning('Follower', `🔄 ${this.account.username} 重连失败 [${proxyIp}] code=${errorCode} msg=${errorMessage} → 继续重试`);
-            this.cleanupForReconnect();
-            setTimeout(() => this.startForReconnect(), 3000);
-        });
-
-        this.client.on('receivedFromGC', (appid, msgType, payload) => {
-            this.handleGCMessageForReconnect(appid, msgType, payload);
-        });
-    }
-    
-    connectGCForReconnect() {
-        if (!this.client) return;  // 🔴 防止清理后延迟触发
-        this.sendHello();
-        const helloInterval = setInterval(() => { 
-            if (!this.client) { clearInterval(helloInterval); return; }  // 🔴 client 被清理则停止
-            if (!this.is_gc_connected) this.sendHello(); 
-            else clearInterval(helloInterval);
-        }, 5000);
-    }
-    
-    handleGCMessageForReconnect(appid, msgType, payload) {
-        if (appid !== this.settings.target_app_id) return;
-        const cleanMsgType = msgType & ~k_EMsgProtoMask;
-
-        if (cleanMsgType === k_EMsgGCClientConnectionStatus) {
-            if (!this.is_gc_connected) {
-                this.is_gc_connected = true;
-                // 清理残留状态
-                if (this.client) {  // 🔴 防止清理后延迟触发
-                    this.client.sendToGC(this.settings.target_app_id, k_EMsgGCAbandonCurrentGame | k_EMsgProtoMask, {}, Buffer.alloc(0));
-                    this.client.sendToGC(this.settings.target_app_id, k_EMsgGCPracticeLobbyLeave | k_EMsgProtoMask, {}, Buffer.alloc(0));
-                }
-                
-                // 直接尝试加入分配的房间（不进池子）
-                setTimeout(() => {
-                    if (this.assignedLobbyId) {
-                        this.joinAssignedLobby();
-                    }
-                }, 1000);
-            }
-        }
-        // 复用其他消息处理
-        else {
-            this.handleGCMessage(appid, msgType, payload);
-        }
+        // 其他错误（网络/限流/临时不可用等）→ 直接回池 + 冷却10分钟
+        const proxyIp = this.proxy?.split('@')[1] || 'no-proxy';
+        this.nextRetryAt = Date.now() + this.FOLLOWER_RETRY_DELAY_MS;
+        logWarning('Follower', `${this.account.username} 加入失败: ${reason} [${proxyIp}] → 回到池子，${Math.ceil(this.FOLLOWER_RETRY_DELAY_MS / 60000)}分钟后重试`);
+        try { this.cleanup(); } catch (e) {}
+        this.pool.returnToPool(this);
     }
 
     onLobbyRemoved() {
